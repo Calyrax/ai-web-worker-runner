@@ -12,8 +12,6 @@ app.get("/", (req, res) => {
 });
 
 app.post("/run", async (req, res) => {
-  // Accept BOTH:
-  // { plan: [...] } OR { commands: [...] }
   const plan = req.body.commands || req.body.plan;
 
   if (!plan || !Array.isArray(plan)) {
@@ -27,7 +25,6 @@ app.post("/run", async (req, res) => {
   try {
     logs.push("Launching bundled Chromium...");
 
-    // Puppeteer base image already knows where Chromium is
     browser = await puppeteer.launch({
       headless: true,
       args: [
@@ -65,16 +62,15 @@ app.post("/run", async (req, res) => {
       }
 
       // 4. Wait
-      if (step.action === 'wait') {
-  const ms =
-    step.milliseconds ||
-    step.value ||
-    (step.seconds ? step.seconds * 1000 : 0);
+      if (step.action === "wait") {
+        const ms =
+          step.milliseconds ||
+          step.value ||
+          (step.seconds ? step.seconds * 1000 : 0);
 
-  await new Promise(resolve => setTimeout(resolve, ms));
-  logs.push(`Waited ${ms} ms`);
-}
-}
+        await new Promise((resolve) => setTimeout(resolve, ms));
+        logs.push(`Waited ${ms} ms`);
+      }
 
       // 5. Extract list
       if (step.action === "extract_list") {
