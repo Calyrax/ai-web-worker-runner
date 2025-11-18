@@ -1,17 +1,25 @@
-# Use Puppeteer's official image — Chromium already installed!
+# Use Puppeteer's official image — Chromium already included
 FROM ghcr.io/puppeteer/puppeteer:latest
 
-# Create app directory
+# Create app directory as root
+USER root
+RUN mkdir -p /app && chown -R pptruser:pptruser /app
+
+# Switch to Puppeteer's non-root user
+USER pptruser
 WORKDIR /app
 
-# Copy package.json and install deps
-COPY package*.json ./
+# Copy package files first
+COPY --chown=pptruser:pptruser package*.json ./
+
+# Install dependencies
 RUN npm install
 
-# Copy your source files
-COPY . .
+# Copy all source code
+COPY --chown=pptruser:pptruser . .
 
-# Expose Railway port
+# Expose port
 EXPOSE 3000
 
+# Start the server
 CMD ["node", "index.js"]
