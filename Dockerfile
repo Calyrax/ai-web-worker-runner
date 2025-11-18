@@ -11,10 +11,11 @@ RUN mkdir -p /app && chown -R pptruser:pptruser /app
 USER pptruser
 WORKDIR /app
 
-# Copy package.json files first (better layer caching)
+# Copy package.json files first (layer caching)
 COPY --chown=pptruser:pptruser package*.json ./
 
-# Install dependencies (no Chromium download needed)
+# Install dependencies (NO Chromium download needed)
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 RUN npm install
 
 # Copy the rest of the code
@@ -25,3 +26,4 @@ EXPOSE 3000
 
 # Run the Node server
 CMD ["node", "index.js"]
+
