@@ -65,10 +65,11 @@ app.post("/run", async (req, res) => {
       }
 
       // 4. Wait
-      if (step.action === "wait") {
-        await page.waitForTimeout(step.seconds * 1000);
-        logs.push(`Waited ${step.seconds} seconds`);
-      }
+      if (step.action === 'wait') {
+  const ms = step.seconds * 1000;
+  await new Promise(res => setTimeout(res, ms));
+  logs.push(`Waited ${step.seconds} seconds`);
+}
 
       // 5. Extract list
       if (step.action === "extract_list") {
