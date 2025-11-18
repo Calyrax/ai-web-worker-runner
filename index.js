@@ -12,7 +12,9 @@ app.get('/', (req, res) => {
 });
 
 app.post('/run', async (req, res) => {
-  const { plan } = req.body;
+  // Accept BOTH:
+  // { plan: [...] } AND { commands: [...] }
+  const plan = req.body.commands || req.body.plan;
 
   if (!plan || !Array.isArray(plan)) {
     return res.status(400).json({ error: 'plan must be an array of steps' });
@@ -67,11 +69,13 @@ app.post('/run', async (req, res) => {
       }
     }
 
-    res.json({ log: logs, result: extracted });
+    res.json({ logs, result: extracted });
+
   } catch (err) {
     console.error(err);
     logs.push(`ERROR: ${err.message}`);
-    res.status(500).json({ error: err.message, log: logs });
+    res.status(500).json({ error: err.message, logs });
+
   } finally {
     if (browser) {
       await browser.close();
@@ -80,8 +84,9 @@ app.post('/run', async (req, res) => {
   }
 });
 
-// Railway will give us PORT in env, fallback for local dev
+// Railway PORT
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Runner backend listening on port ${PORT}`);
 });
+
