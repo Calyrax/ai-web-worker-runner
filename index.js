@@ -25,9 +25,10 @@ app.post('/run', async (req, res) => {
   let extracted = [];
 
   try {
-    logs.push('Launching headless browser...');
+    logs.push('Launching Chromium...');
     browser = await puppeteer.launch({
       headless: true,
+      executablePath: puppeteer.executablePath(),   // 👈 FIX HERE
       args: ['--no-sandbox', '--disable-setuid-sandbox'],
     });
 
@@ -89,4 +90,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Runner backend listening on port ${PORT}`);
 });
-
