@@ -26,14 +26,28 @@ app.post('/run', async (req, res) => {
 
   try {
     logs.push('Launching Chromium...');
+
+    // IMPORTANT: Railway uses system-installed Chromium
+    const executablePath =
+      process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
+
+    logs.push(`Using Chromium path: ${executablePath}`);
+
     browser = await puppeteer.launch({
-      headless: true,
-      executablePath: puppeteer.executablePath(),   // 👈 FIX HERE
-      args: ['--no-sandbox', '--disable-setuid-sandbox'],
-    });
+  headless: true,
+  args: [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-dev-shm-usage',
+    '--disable-gpu',
+    '--single-process',
+  ]
+});
+
 
     const page = await browser.newPage();
 
+    // Execute steps
     for (const step of plan) {
       logs.push(`Executing: ${JSON.stringify(step)}`);
 
