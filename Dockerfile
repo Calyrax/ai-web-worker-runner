@@ -39,7 +39,8 @@ RUN apt-get update && apt-get install -y \
   libxtst6 \
   wget \
   xdg-utils \
-  --no-install-recommends
+  --no-install-recommends && \
+  rm -rf /var/lib/apt/lists/*
 
 # Create app directory
 WORKDIR /app
@@ -47,14 +48,18 @@ WORKDIR /app
 # Copy dependency files
 COPY package*.json ./
 
-# Install dependencies
+# Install node dependencies
 RUN npm install
+
+# ⭐ Download Chromium managed by Puppeteer at build time
+RUN npx puppeteer browsers install chrome
 
 # Copy rest of the code
 COPY . .
 
-# Puppeteer needs this env
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
+# Puppeteer env (make sure downloads are allowed and cache path is set)
+ENV PUPPETEER_SKIP_DOWNLOAD=false
+ENV PUPPETEER_CACHE_DIR=/root/.cache/puppeteer
 
 # Expose the port Railway uses
 EXPOSE 3000
