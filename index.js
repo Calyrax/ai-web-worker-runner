@@ -11,9 +11,7 @@ app.get("/", (req, res) => {
   res.send("AI Web Worker Runner is alive ✅");
 });
 
-/**
- * Utility: push log AND print to Railway logs
- */
+// Logging helper
 function logAndPrint(logs, msg) {
   console.log(msg);
   logs.push(msg);
@@ -26,15 +24,11 @@ app.post("/run", async (req, res) => {
   logAndPrint(logs, "=== Incoming /run request ===");
   logAndPrint(logs, "Body received: " + JSON.stringify(req.body, null, 2));
 
-  // Support both {plan} and {commands}
   const plan = req.body.plan || req.body.commands;
 
   if (!plan || !Array.isArray(plan)) {
-    logAndPrint(logs, "ERROR: plan missing or not an array");
-    return res.status(400).json({
-      error: "plan must be an array of steps",
-      logs,
-    });
+    logAndPrint(logs, "ERROR: plan is missing or not array");
+    return res.status(400).json({ error: "plan must be array", logs });
   }
 
   try {
@@ -63,7 +57,7 @@ app.post("/run", async (req, res) => {
       logAndPrint(logs, JSON.stringify(step));
 
       if (!step.action) {
-        logAndPrint(logs, "ERROR: Missing 'action' key in step");
+        logAndPrint(logs, "ERROR: Missing 'action'");
         continue;
       }
 
@@ -74,123 +68,79 @@ app.post("/run", async (req, res) => {
             await page.goto(step.url, { waitUntil: "networkidle2" });
             break;
 
-          case "click":
-            logAndPrint(logs, "Clicking selector: " + step.selector);
-            await page.click(step.selector);
-            break;
-
-          case "type":
-            logAndPrint(logs, `Typing into ${step.selector}: ${step.text}`);
-            await page.type(step.selector, step.text);
-            break;
-
           case "wait":
             const ms =
+              step.duration ||
               step.milliseconds ||
-              step.value ||
               (step.seconds ? step.seconds * 1000 : 0);
 
             logAndPrint(logs, `Waiting for ${ms}ms`);
             await new Promise((resolve) => setTimeout(resolve, ms));
             break;
 
-          // --------------------------------------
-          // NEW FIXED extract_list IMPLEMENTATION
-          // --------------------------------------
           case "extract_list":
-            logAndPrint(logs, `Extracting list...`);
-            logAndPrint(logs, JSON.stringify(step));
+            logAndPrint(logs, "Extracting list…");
 
-            // Resolve selector properly
-            let selector = step.selector;
+            const selectors = [
+              step.selector,         // user-provided
+              ".titlelink",          // modern HN
+              ".storylink",          // old HN
+              ".athing .title a",    // fallback
+              "td.title > a",        // deepest fallback
+              "a[href^='item?id=']", // text-mode fallback
+            ].filter(Boolean);
 
-            // If AI returns "target" instead of "selector"
-            if (!selector && step.target) {
-              switch (step.target) {
-                case "headlines":
-                  selector = ".titleline a, a.storylink"; // HN headlines
-                  break;
+            let found = [];
 
-                case "links":
-                  selector = "a";
-                  break;
+            for (const sel of selectors) {
+              try {
+                logAndPrint(logs, `Trying selector: ${sel}`);
 
-                default:
-                  logAndPrint(
-                    logs,
-                    `Unknown target '${step.target}', cannot derive selector`
-                  );
-                  throw new Error(
-                    `extract_list requires a valid selector or known target. Received: ${JSON.stringify(
-                      step
-                    )}`
-                  );
-              }
-            }
-
-            if (!selector) {
-              throw new Error(
-                `extract_list step missing selector. Step: ${JSON.stringify(step)}`
-              );
-            }
-
-            try {
-              const limit = step.limit || step.count || 10;
-
-              logAndPrint(logs, `Using selector: ${selector}`);
-              logAndPrint(logs, `Limit: ${limit}`);
-
-              const items = await page.$$eval(selector, (els) =>
-                els
-                  .map((el) => ({
-                    text: (el.textContent || "").trim(),
+                const items = await page.$$eval(sel, (elements) =>
+                  elements.map((el) => ({
+                    text: el.textContent?.trim() || "",
                     href: el.href || null,
                   }))
-                  .filter((item) => item.text.length > 0)
-              );
+                );
 
-              const sliced = items.slice(0, limit);
-              extracted = sliced;
-
-              logAndPrint(
-                logs,
-                `Extracted ${sliced.length} items — sample: ${JSON.stringify(
-                  sliced.slice(0, 3),
-                  null,
-                  2
-                )}...`
-              );
-            } catch (exErr) {
-              logAndPrint(
-                logs,
-                `ERROR in extract_list: ${exErr.message}`
-              );
+                if (items.length > 0) {
+                  found = items;
+                  break;
+                }
+              } catch {}
             }
+
+            logAndPrint(logs, "PAGE HTML (first 500 chars): " + (await page.content()).slice(0, 500));
+
+            extracted = found.slice(0, step.limit || step.count || 20);
+
+            logAndPrint(
+              logs,
+              `Extracted ${extracted.length} items — sample: ${JSON.stringify(
+                extracted.slice(0, 3),
+                null,
+                2
+              )}…`
+            );
 
             break;
 
           default:
-            logAndPrint(logs, "ERROR: Unknown action: " + step.action);
-            break;
+            logAndPrint(logs, "Unknown action: " + step.action);
         }
-      } catch (stepErr) {
+      } catch (err) {
         logAndPrint(
           logs,
-          `ERROR executing step ${i + 1} (${step.action}): ${stepErr.message}`
+          `ERROR executing step ${i + 1} (${step.action}): ${err.message}`
         );
       }
     }
 
     logAndPrint(logs, "Task finished successfully.");
     return res.json({ logs, result: extracted });
-
   } catch (err) {
-    logAndPrint(logs, `FATAL ERROR: ${err.message}`);
-    return res.status(500).json({
-      error: err.message,
-      logs,
-    });
-
+    logAndPrint(logs, "FATAL ERROR: " + err.message);
+    return res.status(500).json({ error: err.message, logs });
   } finally {
     if (browser) {
       await browser.close();
@@ -199,7 +149,6 @@ app.post("/run", async (req, res) => {
   }
 });
 
-// Port
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Runner backend listening on port ${PORT}`);
