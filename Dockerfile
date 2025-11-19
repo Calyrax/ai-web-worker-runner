@@ -1,29 +1,51 @@
-# Use Puppeteer’s official image — includes Chromium + all dependencies
-FROM ghcr.io/puppeteer/puppeteer:latest
+# -----------------------------
+# Node base image
+# -----------------------------
+FROM node:18-slim
 
-# Switch to root so we can create the app directory
-USER root
+# Install system dependencies required for Chrome
+RUN apt-get update && apt-get install -y \
+    wget gnupg ca-certificates \
+    fonts-liberation \
+    libatk-bridge2.0-0 \
+    libnss3 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libasound2 \
+    libpango-1.0-0 \
+    libcups2 \
+    libxshmfence1 \
+    --no-install-recommends
 
-# Create /app and give permissions to the pptruser (non-root)
-RUN mkdir -p /app && chown -R pptruser:pptruser /app
+# Add Google Chrome repo key
+RUN wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | apt-key add -
 
-# Switch to non-root user that Puppeteer requires
-USER pptruser
+# Add Google Chrome repo
+RUN echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" \
+    | tee /etc/apt/sources.list.d/google-chrome.list
+
+# Install Google Chrome Stable
+RUN apt-get update && apt-get install -y google-chrome-stable
+
+# App directory
 WORKDIR /app
 
-# Copy package.json files first (layer caching)
-COPY --chown=pptruser:pptruser package*.json ./
+# Copy package files first
+COPY package*.json ./
 
-# Install dependencies (NO Chromium download needed)
-ENV PUPPETEER_SKIP_DOWNLOAD=true
+# Install NPM packages
 RUN npm install
 
-# Copy the rest of the code
-COPY --chown=pptruser:pptruser . .
+# Copy everything else
+COPY . .
 
-# Expose the backend port
+# Tell Puppeteer where Chrome is
+ENV PUPPETEER_EXECUTABLE_PATH="/usr/bin/google-chrome-stable"
+
+# Expose runner port
 EXPOSE 3000
 
-# Run the Node server
+# Start the server
 CMD ["node", "index.js"]
 

@@ -1,31 +1,31 @@
-// ================================
-// AI WEB WORKER RUNNER (STEALTH MODE)
-// ================================
+// ==========================================
+// AI WEB WORKER RUNNER — FULL STEALTH VERSION
+// ==========================================
 
 import express from "express";
 import cors from "cors";
 
-// 🔥 Stealth Puppeteer
+// Puppeteer (stealth)
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 
+// Enable stealth mode
 puppeteer.use(StealthPlugin());
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
-// Sleep helper for Puppeteer v22+
-const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
-
+// --------------------------------------
 // Health check
+// --------------------------------------
 app.get("/", (req, res) => {
   res.json({ status: "runner-online" });
 });
 
-// -----------------------------
-//  MAIN EXECUTION ROUTE
-// -----------------------------
+// --------------------------------------
+// MAIN EXECUTION ROUTE
+// --------------------------------------
 app.post("/run", async (req, res) => {
   const plan = req.body.plan;
   if (!Array.isArray(plan)) {
@@ -41,55 +41,50 @@ app.post("/run", async (req, res) => {
   let browser;
 
   try {
-    log("Launching browser with stealth...");
+    log("Launching Chrome with stealth...");
 
     browser = await puppeteer.launch({
       headless: true,
+      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH, // Chrome from Dockerfile
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--disable-gpu",
-      ],
+        "--disable-gpu"
+      ]
     });
 
     const page = await browser.newPage();
 
-    // Fake a real user environment
+    // Fake a real Chrome user
     await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36"
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
     );
 
     await page.setExtraHTTPHeaders({
-      "accept-language": "en-US,en;q=0.9",
+      "accept-language": "en-US,en;q=0.9"
     });
 
-    log(`Plan contains ${plan.length} steps`);
-
     let extracted = [];
+
+    log(`Plan contains ${plan.length} steps`);
 
     for (let i = 0; i < plan.length; i++) {
       const step = plan[i];
       log(`--- Step ${i + 1}/${plan.length} ---`);
       log(JSON.stringify(step));
 
-      // -------------------
-      // ACTION: open_page
-      // -------------------
+      // OPEN PAGE
       if (step.action === "open_page") {
-        log("Opening page: " + step.url);
-
+        log(`Opening page: ${step.url}`);
         await page.goto(step.url, {
           waitUntil: "networkidle2",
-          timeout: 60000,
+          timeout: 60000
         });
-
-        await sleep(2000);
+        await page.waitForTimeout(2000);
       }
 
-      // -------------------
-      // ACTION: wait
-      // -------------------
+      // WAIT
       else if (step.action === "wait") {
         const ms =
           step.duration ||
@@ -97,30 +92,26 @@ app.post("/run", async (req, res) => {
           (step.seconds ? step.seconds * 1000 : 0);
 
         log(`Waiting for ${ms}ms`);
-        await sleep(ms);
+        await page.waitForTimeout(ms);
       }
 
-      // -------------------
-      // ACTION: extract_list
-      // -------------------
+      // EXTRACT LIST
       else if (step.action === "extract_list") {
         log("Extracting list…");
 
-        const html = await page.content();
-        const domain = step.domain || page.url();
         let selector = step.selector;
+        const url = page.url();
 
-        // Auto-detect selectors
         if (!selector) {
-          if (domain.includes("news.ycombinator.com")) {
+          if (url.includes("ycombinator.com")) {
             selector = ".titleline > a";
-            log("Auto-selector for Hacker News: " + selector);
-          } else if (domain.includes("amazon.com")) {
+            log("Auto-selector for Hacker News");
+          } else if (url.includes("amazon.com")) {
             selector = "h2 a.a-link-normal";
-            log("Auto-selector for Amazon: " + selector);
-          } else if (domain.includes("zillow.com")) {
+            log("Auto-selector for Amazon");
+          } else if (url.includes("zillow.com")) {
             selector = ".list-card-info a";
-            log("Auto-selector for Zillow: " + selector);
+            log("Auto-selector for Zillow");
           } else {
             selector = "a";
             log("Fallback selector: a");
@@ -132,22 +123,18 @@ app.post("/run", async (req, res) => {
         const items = await page.$$eval(selector, (elements) =>
           elements.map((el) => ({
             text: el.innerText?.trim() || "",
-            href: el.href || null,
+            href: el.href || ""
           }))
         );
 
-        extracted = items.slice(0, step.limit || step.count || 20);
-
+        extracted = items.slice(0, step.limit || 20);
         log(
-          `Extracted ${extracted.length} items — sample: ${JSON.stringify(
-            extracted.slice(0, 3),
-            null,
-            2
-          )}...`
+          `Extracted ${extracted.length} items — sample: ` +
+            JSON.stringify(extracted.slice(0, 3), null, 2)
         );
       }
 
-      // Unknown action
+      // UNKNOWN ACTION
       else {
         log("Unknown action: " + step.action);
       }
@@ -166,7 +153,7 @@ app.post("/run", async (req, res) => {
   }
 });
 
-// PORT
+// --------------------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Runner backend listening on port " + PORT);
