@@ -1,38 +1,44 @@
-const express = require("express");
-const cors = require("cors");
-const puppeteer = require("puppeteer");
+// ================================
+// AI WEB WORKER RUNNER (STEALTH MODE)
+// ================================
+
+import express from "express";
+import cors from "cors";
+
+// 🔥 Stealth Puppeteer
+import puppeteer from "puppeteer-extra";
+import StealthPlugin from "puppeteer-extra-plugin-stealth";
+
+puppeteer.use(StealthPlugin());
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 
-// Health-check
+// Health check
 app.get("/", (req, res) => {
-  res.send("AI Web Worker Runner is alive ✅");
+  res.json({ status: "runner-online" });
 });
 
-// Logging helper
-function logAndPrint(logs, msg) {
-  console.log(msg);
-  logs.push(msg);
-}
-
+// -----------------------------
+//  MAIN EXECUTION ROUTE
+// -----------------------------
 app.post("/run", async (req, res) => {
-  const logs = [];
-  let browser;
-
-  logAndPrint(logs, "=== Incoming /run request ===");
-  logAndPrint(logs, "Body received: " + JSON.stringify(req.body, null, 2));
-
-  const plan = req.body.plan || req.body.commands;
-
-  if (!plan || !Array.isArray(plan)) {
-    logAndPrint(logs, "ERROR: plan is missing or not array");
-    return res.status(400).json({ error: "plan must be array", logs });
+  const plan = req.body.plan;
+  if (!Array.isArray(plan)) {
+    return res.status(400).json({ error: "plan must be an array" });
   }
 
+  let logs = [];
+  const log = (msg) => {
+    console.log(msg);
+    logs.push(msg);
+  };
+
+  let browser;
+
   try {
-    logAndPrint(logs, "Launching Chromium...");
+    log("Launching browser with stealth...");
 
     browser = await puppeteer.launch({
       headless: true,
@@ -40,119 +46,124 @@ app.post("/run", async (req, res) => {
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--single-process",
-        "--no-zygote",
+        "--disable-gpu"
       ],
     });
 
     const page = await browser.newPage();
-    let extracted = [];
 
-    logAndPrint(logs, `Plan contains ${plan.length} steps`);
+    // Fake a real user environment
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36"
+    );
+
+    await page.setExtraHTTPHeaders({
+      "accept-language": "en-US,en;q=0.9",
+    });
+
+    log(`Plan contains ${plan.length} steps`);
+
+    let extracted = [];
 
     for (let i = 0; i < plan.length; i++) {
       const step = plan[i];
-      logAndPrint(logs, `--- Step ${i + 1}/${plan.length} ---`);
-      logAndPrint(logs, JSON.stringify(step));
+      log(`--- Step ${i + 1}/${plan.length} ---`);
+      log(JSON.stringify(step));
 
-      if (!step.action) {
-        logAndPrint(logs, "ERROR: Missing 'action'");
-        continue;
+      // -------------------
+      // ACTION: open_page
+      // -------------------
+      if (step.action === "open_page") {
+        log("Opening page: " + step.url);
+
+        await page.goto(step.url, {
+          waitUntil: "networkidle2",
+          timeout: 60000,
+        });
+
+        await page.waitForTimeout(2000);
       }
 
-      try {
-        switch (step.action) {
-          case "open_page":
-            logAndPrint(logs, "Opening page: " + step.url);
-            await page.goto(step.url, { waitUntil: "networkidle2" });
-            break;
+      // -------------------
+      // ACTION: wait
+      // -------------------
+      else if (step.action === "wait") {
+        const ms =
+          step.duration ||
+          step.milliseconds ||
+          (step.seconds ? step.seconds * 1000 : 0);
 
-          case "wait":
-            const ms =
-              step.duration ||
-              step.milliseconds ||
-              (step.seconds ? step.seconds * 1000 : 0);
+        log(`Waiting for ${ms}ms`);
+        await page.waitForTimeout(ms);
+      }
 
-            logAndPrint(logs, `Waiting for ${ms}ms`);
-            await new Promise((resolve) => setTimeout(resolve, ms));
-            break;
+      // -------------------
+      // ACTION: extract_list (auto-detects site)
+      // -------------------
+      else if (step.action === "extract_list") {
+        log("Extracting list…");
 
-          case "extract_list":
-            logAndPrint(logs, "Extracting list…");
+        const html = await page.content();
+        const domain = step.domain || page.url();
+        let selector = step.selector;
 
-            const selectors = [
-              step.selector,         // user-provided
-              ".titlelink",          // modern HN
-              ".storylink",          // old HN
-              ".athing .title a",    // fallback
-              "td.title > a",        // deepest fallback
-              "a[href^='item?id=']", // text-mode fallback
-            ].filter(Boolean);
-
-            let found = [];
-
-            for (const sel of selectors) {
-              try {
-                logAndPrint(logs, `Trying selector: ${sel}`);
-
-                const items = await page.$$eval(sel, (elements) =>
-                  elements.map((el) => ({
-                    text: el.textContent?.trim() || "",
-                    href: el.href || null,
-                  }))
-                );
-
-                if (items.length > 0) {
-                  found = items;
-                  break;
-                }
-              } catch {}
-            }
-
-            logAndPrint(logs, "PAGE HTML (first 500 chars): " + (await page.content()).slice(0, 500));
-
-            extracted = found.slice(0, step.limit || step.count || 20);
-
-            logAndPrint(
-              logs,
-              `Extracted ${extracted.length} items — sample: ${JSON.stringify(
-                extracted.slice(0, 3),
-                null,
-                2
-              )}…`
-            );
-
-            break;
-
-          default:
-            logAndPrint(logs, "Unknown action: " + step.action);
+        // Auto-detect selectors:
+        if (!selector) {
+          if (domain.includes("news.ycombinator.com")) {
+            selector = ".titleline > a";
+            log("Auto-selector for Hacker News: " + selector);
+          } else if (domain.includes("amazon.com")) {
+            selector = "h2 a.a-link-normal";
+            log("Auto-selector for Amazon: " + selector);
+          } else if (domain.includes("zillow.com")) {
+            selector = ".list-card-info a";
+            log("Auto-selector for Zillow: " + selector);
+          } else {
+            selector = "a";
+            log("Fallback selector: a");
+          }
         }
-      } catch (err) {
-        logAndPrint(
-          logs,
-          `ERROR executing step ${i + 1} (${step.action}): ${err.message}`
+
+        log("Using selector: " + selector);
+
+        const items = await page.$$eval(selector, (elements) =>
+          elements.map((el) => ({
+            text: el.innerText?.trim() || "",
+            href: el.href || null,
+          }))
         );
+
+        extracted = items.slice(0, step.limit || 20);
+        log(`Extracted ${extracted.length} items — sample: ${JSON.stringify(extracted.slice(0, 3), null, 2)}...`);
+      }
+
+      // -------------------
+      // Unknown action
+      // -------------------
+      else {
+        log("Unknown action: " + step.action);
       }
     }
 
-    logAndPrint(logs, "Task finished successfully.");
     return res.json({ logs, result: extracted });
   } catch (err) {
-    logAndPrint(logs, "FATAL ERROR: " + err.message);
+    console.error(err);
+    logs.push("FATAL ERROR: " + err.message);
     return res.status(500).json({ error: err.message, logs });
   } finally {
     if (browser) {
       await browser.close();
-      logAndPrint(logs, "Browser closed");
+      logs.push("Browser closed.");
     }
   }
 });
 
+// PORT
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Runner backend listening on port ${PORT}`);
+  console.log("Runner backend listening on port " + PORT);
 });
+
 
 
 
