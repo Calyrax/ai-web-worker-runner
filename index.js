@@ -1,11 +1,11 @@
-// ======================================
-// AI WEB WORKER RUNNER (STEALTH + CHROME FIX)
-// ======================================
+// ================================
+// AI WEB WORKER RUNNER (STEALTH MODE)
+// ================================
 
 import express from "express";
 import cors from "cors";
 
-// Stealth Puppeteer (requires FULL puppeteer installed)
+// 🔥 Stealth Puppeteer
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 
@@ -15,128 +15,119 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
-// ------------------------------------
-// HEALTH CHECK
-// ------------------------------------
+// Sleep helper for Puppeteer v22+
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+// Health check
 app.get("/", (req, res) => {
   res.json({ status: "runner-online" });
 });
 
-// Utility for logging
-function pushLog(logs, msg) {
-  console.log(msg);
-  logs.push(msg);
-}
-
-// ------------------------------------
-// MAIN EXECUTION ROUTE
-// ------------------------------------
+// -----------------------------
+//  MAIN EXECUTION ROUTE
+// -----------------------------
 app.post("/run", async (req, res) => {
   const plan = req.body.plan;
-  const logs = [];
-
   if (!Array.isArray(plan)) {
-    return res.status(400).json({
-      error: "plan must be an array",
-      logs,
-    });
+    return res.status(400).json({ error: "plan must be an array" });
   }
 
-  let browser = null;
-  let extracted = [];
+  let logs = [];
+  const log = (msg) => {
+    console.log(msg);
+    logs.push(msg);
+  };
+
+  let browser;
 
   try {
-    pushLog(logs, "Launching browser with stealth...");
+    log("Launching browser with stealth...");
 
-    // ⭐ FIX: puppeteer.executablePath() ensures Chrome exists
     browser = await puppeteer.launch({
-      headless: "new",
-      executablePath: puppeteer.executablePath(),
+      headless: true,
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
-        "--disable-gpu",
         "--disable-dev-shm-usage",
-        "--no-zygote",
-        "--single-process",
+        "--disable-gpu",
       ],
     });
 
     const page = await browser.newPage();
 
-    // Fake a real browser fingerprint
+    // Fake a real user environment
     await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36"
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36"
     );
 
     await page.setExtraHTTPHeaders({
       "accept-language": "en-US,en;q=0.9",
     });
 
-    pushLog(logs, `Plan contains ${plan.length} steps`);
+    log(`Plan contains ${plan.length} steps`);
 
-    // =====================================
-    // EXECUTE EACH STEP
-    // =====================================
+    let extracted = [];
+
     for (let i = 0; i < plan.length; i++) {
       const step = plan[i];
-      pushLog(logs, `--- Step ${i + 1}/${plan.length} ---`);
-      pushLog(logs, JSON.stringify(step));
+      log(`--- Step ${i + 1}/${plan.length} ---`);
+      log(JSON.stringify(step));
 
-      // ----------------------------
-      // OPEN PAGE
-      // ----------------------------
+      // -------------------
+      // ACTION: open_page
+      // -------------------
       if (step.action === "open_page") {
-        pushLog(logs, "Opening page: " + step.url);
+        log("Opening page: " + step.url);
 
         await page.goto(step.url, {
           waitUntil: "networkidle2",
           timeout: 60000,
         });
 
-        await page.waitForTimeout(2000);
+        await sleep(2000);
       }
 
-      // ----------------------------
-      // WAIT STEP
-      // ----------------------------
+      // -------------------
+      // ACTION: wait
+      // -------------------
       else if (step.action === "wait") {
         const ms =
           step.duration ||
           step.milliseconds ||
           (step.seconds ? step.seconds * 1000 : 0);
 
-        pushLog(logs, `Waiting ${ms}ms`);
-        await page.waitForTimeout(ms);
+        log(`Waiting for ${ms}ms`);
+        await sleep(ms);
       }
 
-      // ----------------------------
-      // EXTRACT LIST (auto site detection)
-      // ----------------------------
+      // -------------------
+      // ACTION: extract_list
+      // -------------------
       else if (step.action === "extract_list") {
-        pushLog(logs, "Extracting list…");
+        log("Extracting list…");
 
+        const html = await page.content();
+        const domain = step.domain || page.url();
         let selector = step.selector;
-        const url = page.url();
 
-        // Auto-select based on domain
+        // Auto-detect selectors
         if (!selector) {
-          if (url.includes("news.ycombinator.com")) {
+          if (domain.includes("news.ycombinator.com")) {
             selector = ".titleline > a";
-            pushLog(logs, "Auto-selector: Hacker News");
-          } else if (url.includes("amazon.com")) {
+            log("Auto-selector for Hacker News: " + selector);
+          } else if (domain.includes("amazon.com")) {
             selector = "h2 a.a-link-normal";
-            pushLog(logs, "Auto-selector: Amazon");
-          } else if (url.includes("zillow.com")) {
+            log("Auto-selector for Amazon: " + selector);
+          } else if (domain.includes("zillow.com")) {
             selector = ".list-card-info a";
-            pushLog(logs, "Auto-selector: Zillow");
+            log("Auto-selector for Zillow: " + selector);
           } else {
             selector = "a";
-            pushLog(logs, "Fallback selector: a");
+            log("Fallback selector: a");
           }
         }
 
-        pushLog(logs, "Using selector: " + selector);
+        log("Using selector: " + selector);
 
         const items = await page.$$eval(selector, (elements) =>
           elements.map((el) => ({
@@ -147,42 +138,38 @@ app.post("/run", async (req, res) => {
 
         extracted = items.slice(0, step.limit || step.count || 20);
 
-        pushLog(
-          logs,
+        log(
           `Extracted ${extracted.length} items — sample: ${JSON.stringify(
             extracted.slice(0, 3),
             null,
             2
-          )}`
+          )}...`
         );
       }
 
-      // ----------------------------
-      // UNKNOWN ACTION
-      // ----------------------------
+      // Unknown action
       else {
-        pushLog(logs, "Unknown action: " + step.action);
+        log("Unknown action: " + step.action);
       }
     }
 
     return res.json({ logs, result: extracted });
   } catch (err) {
-    pushLog(logs, "FATAL ERROR: " + err.message);
+    console.error(err);
+    logs.push("FATAL ERROR: " + err.message);
     return res.status(500).json({ error: err.message, logs });
   } finally {
     if (browser) {
-      pushLog(logs, "Closing browser...");
       await browser.close();
-      pushLog(logs, "Browser closed");
+      logs.push("Browser closed.");
     }
   }
 });
 
-// ------------------------------------
 // PORT
-// ------------------------------------
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Runner backend listening on port " + PORT);
 });
+
 
