@@ -2,9 +2,11 @@
   "name": "ai-web-worker-runner",
   "version": "1.0.0",
   "private": false,
+  "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "postinstall": "puppeteer browsers install chrome"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -14,3 +16,4 @@
     "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }
+
