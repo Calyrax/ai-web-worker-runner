@@ -1,30 +1,26 @@
-// ==========================================
-// AI WEB WORKER RUNNER — FULL STEALTH VERSION
-// ==========================================
+// ================================
+// AI WEB WORKER RUNNER (STEALTH MODE + PUPPETEER 22 COMPATIBLE)
+// ================================
 
 import express from "express";
 import cors from "cors";
 
-// Puppeteer (stealth)
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 
-// Enable stealth mode
 puppeteer.use(StealthPlugin());
 
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
-// --------------------------------------
 // Health check
-// --------------------------------------
 app.get("/", (req, res) => {
   res.json({ status: "runner-online" });
 });
 
 // --------------------------------------
-// MAIN EXECUTION ROUTE
+// Main execution route
 // --------------------------------------
 app.post("/run", async (req, res) => {
   const plan = req.body.plan;
@@ -45,46 +41,53 @@ app.post("/run", async (req, res) => {
 
     browser = await puppeteer.launch({
       headless: true,
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH, // Chrome from Dockerfile
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--disable-gpu"
-      ]
+        "--disable-gpu",
+      ],
     });
 
     const page = await browser.newPage();
 
-    // Fake a real Chrome user
+    // Spoof a real browser
     await page.setUserAgent(
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
     );
 
     await page.setExtraHTTPHeaders({
-      "accept-language": "en-US,en;q=0.9"
+      "accept-language": "en-US,en;q=0.9",
     });
-
-    let extracted = [];
 
     log(`Plan contains ${plan.length} steps`);
 
+    let extracted = [];
+
     for (let i = 0; i < plan.length; i++) {
       const step = plan[i];
+
       log(`--- Step ${i + 1}/${plan.length} ---`);
       log(JSON.stringify(step));
 
-      // OPEN PAGE
+      // ---------------------------
+      // open_page
+      // ---------------------------
       if (step.action === "open_page") {
-        log(`Opening page: ${step.url}`);
+        log("Opening page: " + step.url);
+
         await page.goto(step.url, {
           waitUntil: "networkidle2",
-          timeout: 60000
+          timeout: 60000,
         });
-        await page.waitForTimeout(2000);
+
+        // Puppeteer 22+ → no waitForTimeout()
+        await new Promise((r) => setTimeout(r, 2000));
       }
 
-      // WAIT
+      // ---------------------------
+      // wait
+      // ---------------------------
       else if (step.action === "wait") {
         const ms =
           step.duration ||
@@ -92,26 +95,28 @@ app.post("/run", async (req, res) => {
           (step.seconds ? step.seconds * 1000 : 0);
 
         log(`Waiting for ${ms}ms`);
-        await page.waitForTimeout(ms);
+        await new Promise((r) => setTimeout(r, ms));
       }
 
-      // EXTRACT LIST
+      // ---------------------------
+      // extract_list
+      // ---------------------------
       else if (step.action === "extract_list") {
         log("Extracting list…");
 
+        const domain = page.url();
         let selector = step.selector;
-        const url = page.url();
 
         if (!selector) {
-          if (url.includes("ycombinator.com")) {
+          if (domain.includes("news.ycombinator.com")) {
             selector = ".titleline > a";
-            log("Auto-selector for Hacker News");
-          } else if (url.includes("amazon.com")) {
+            log("Auto-selector: Hacker News");
+          } else if (domain.includes("amazon.com")) {
             selector = "h2 a.a-link-normal";
-            log("Auto-selector for Amazon");
-          } else if (url.includes("zillow.com")) {
+            log("Auto-selector: Amazon products");
+          } else if (domain.includes("zillow.com")) {
             selector = ".list-card-info a";
-            log("Auto-selector for Zillow");
+            log("Auto-selector: Zillow listings");
           } else {
             selector = "a";
             log("Fallback selector: a");
@@ -120,21 +125,23 @@ app.post("/run", async (req, res) => {
 
         log("Using selector: " + selector);
 
-        const items = await page.$$eval(selector, (elements) =>
-          elements.map((el) => ({
+        const items = await page.$$eval(selector, (els) =>
+          els.map((el) => ({
             text: el.innerText?.trim() || "",
-            href: el.href || ""
+            href: el.href || null,
           }))
         );
 
         extracted = items.slice(0, step.limit || 20);
         log(
-          `Extracted ${extracted.length} items — sample: ` +
-            JSON.stringify(extracted.slice(0, 3), null, 2)
+          `Extracted ${extracted.length} items — sample: ${JSON.stringify(
+            extracted.slice(0, 3),
+            null,
+            2
+          )}`
         );
       }
 
-      // UNKNOWN ACTION
       else {
         log("Unknown action: " + step.action);
       }
@@ -148,15 +155,14 @@ app.post("/run", async (req, res) => {
   } finally {
     if (browser) {
       await browser.close();
-      logs.push("Browser closed.");
+      logs.push("Browser closed");
     }
   }
 });
 
-// --------------------------------------
+// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Runner backend listening on port " + PORT);
 });
-
 
