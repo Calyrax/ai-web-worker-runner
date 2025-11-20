@@ -46,8 +46,25 @@ app.post("/run", async (req, res) => {
       }
 
       if (step.action === "wait") {
-        await page.waitForTimeout(step.duration || 2000);
-      }
+  let delay = step.duration || step.time || 2000;
+
+  // Convert "3 seconds" or "5s" to milliseconds
+  if (typeof delay === "string") {
+    const cleaned = delay.toLowerCase().trim();
+
+    if (cleaned.includes("second")) {
+      delay = parseInt(cleaned) * 1000;
+    } else if (cleaned.endsWith("s")) {
+      delay = parseInt(cleaned) * 1000;
+    } else {
+      delay = parseInt(cleaned);
+    }
+  }
+
+  if (isNaN(delay)) delay = 2000;
+
+  await page.waitForTimeout(delay);
+}
 
       if (step.action === "extract_list") {
         logs.push("🔍 Extracting...");
