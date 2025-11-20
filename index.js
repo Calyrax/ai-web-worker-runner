@@ -73,16 +73,26 @@ app.post("/run", async (req, res) => {
     log("Launching Chrome with stealth...");
 
     browser = await puppeteer.launch({
-      headless: true,
+      headless: "new",
       args: [
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--disable-gpu",
+        "--start-maximized",
+        "--window-size=1920,1080",
       ],
     });
 
     const page = await browser.newPage();
+
+    await page.setViewport({ width: 1920, height: 1080 });
+
+    // Extra anti-bot tweak: hide webdriver flag
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", {
+        get: () => undefined,
+      });
+    });
 
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -135,7 +145,7 @@ app.post("/run", async (req, res) => {
       }
 
       // ---------------------------
-      // extract_list (FIXED VERSION)
+      // extract_list (FORCE RENDER VERSION)
       // ---------------------------
       else if (step.action === "extract_list") {
         log("Extracting list…");
@@ -145,60 +155,63 @@ app.post("/run", async (req, res) => {
         extracted = await retry(async () => {
           // ================= AMAZON =================
           if (domain.includes("amazon.")) {
-            log("Using SHA-hardened Amazon extractor");
+            log("Amazon FORCE render extractor");
 
-            await new Promise((r) => setTimeout(r, 3000));
+            await page.waitForSelector("div.s-main-slot", { timeout: 15000 });
+            await autoScroll(page, 30);
 
             return await page.evaluate(() => {
-              const results = [];
-              const cards = document.querySelectorAll("div.s-result-item");
+              const cards = [...document.querySelectorAll("div[data-component-type='s-search-result']")];
 
-              cards.forEach(card => {
-                const title = card.querySelector("h2")?.innerText;
-                const priceWhole = card.querySelector(".a-price-whole")?.innerText;
-                const priceFraction = card.querySelector(".a-price-fraction")?.innerText;
-                const image = card.querySelector("img")?.src;
-                const url = card.querySelector("a.a-link-normal")?.href;
+              return cards
+                .map((card) => {
+                  const title = card.querySelector("h2 span")?.innerText;
+                  const priceWhole = card.querySelector(".a-price-whole")?.innerText;
+                  const priceFraction = card.querySelector(".a-price-fraction")?.innerText;
+                  const image = card.querySelector("img")?.src;
+                  const url = card.querySelector("h2 a")?.href;
 
-                if (title) {
-                  results.push({
+                  if (!title) return null;
+
+                  return {
                     title,
-                    price: priceWhole ? `$${priceWhole}.${priceFraction || "00"}` : null,
+                    price: priceWhole
+                      ? `$${priceWhole}${priceFraction ? "." + priceFraction : ""}`
+                      : null,
                     image,
-                    url
-                  });
-                }
-              });
-
-              return results;
+                    url,
+                  };
+                })
+                .filter(Boolean);
             });
           }
 
           // ================= ZILLOW =================
           if (domain.includes("zillow.com")) {
-            log("Using Zillow DATA-LAYER extractor");
+            log("Zillow FORCE render extractor");
+
+            await page.waitForSelector("article", { timeout: 20000 });
+            await autoScroll(page, 30);
 
             return await page.evaluate(() => {
-              try {
-                const state =
-                  window.__INITIAL_STATE__ ||
-                  window.__ZILLOW_GLOBALS__ ||
-                  window.App?.state;
+              const cards = [...document.querySelectorAll("article")];
 
-                const results =
-                  state?.searchPageState?.cat1?.searchResults?.listResults || [];
+              return cards
+                .map((card) => {
+                  const title = card.querySelector("address")?.innerText;
+                  const price =
+                    card.querySelector("span[data-test='property-card-price']")?.innerText ||
+                    card.querySelector("span[data-test='property-price']")?.innerText;
+                  const image = card.querySelector("img")?.src;
+                  const url =
+                    card.querySelector("a[data-test='property-card-link']")?.href ||
+                    card.querySelector("a")?.href;
 
-                return results.map(item => ({
-                  title: item.address,
-                  price: item.price,
-                  url: item.detailUrl
-                    ? "https://www.zillow.com" + item.detailUrl
-                    : null,
-                  image: item.imgSrc
-                }));
-              } catch (e) {
-                return [];
-              }
+                  if (!title) return null;
+
+                  return { title, price, image, url };
+                })
+                .filter(Boolean);
             });
           }
 
@@ -214,7 +227,7 @@ app.post("/run", async (req, res) => {
           );
         });
 
-        extracted = extracted.slice(0, step.limit || 20);
+        extracted = extracted.slice(0, step.limit || step.count || 20);
 
         log(
           `Extracted ${extracted.length} items — sample: ${JSON.stringify(
