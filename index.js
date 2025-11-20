@@ -1,5 +1,6 @@
 // ================================
 // AI WEB WORKER RUNNER (SMARTPROXY + PUPPETEER 22)
+// HARDENED VERSION – RELIABLE AMAZON + ZILLOW EXTRACTION
 // ================================
 
 import express from "express";
@@ -30,21 +31,23 @@ app.get("/", (req, res) => {
 // --------------------------------------
 // Helpers
 // --------------------------------------
-async function wait(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function waitForSelectorSafe(page, selector, timeout = 20000) {
+async function safeWaitSelector(page, selector, timeout = 30000) {
   try {
-    await page.waitForSelector(selector, { timeout });
+    await page.waitForSelector(selector, { timeout, visible: true });
     return true;
   } catch {
     return false;
   }
 }
 
+async function humanDelay() {
+  await wait(800 + Math.random() * 1200);
+}
+
 // --------------------------------------
-// Main runner route
+// MAIN RUNNER
 // --------------------------------------
 app.post("/run", async (req, res) => {
   const plan = req.body.plan;
@@ -71,34 +74,24 @@ app.post("/run", async (req, res) => {
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
-      ],
+        "--window-size=1920,1080"
+      ]
     });
 
     const page = await browser.newPage();
 
-    // Proxy auth
     if (PROXY_USER && PROXY_PASS) {
       await page.authenticate({
         username: PROXY_USER,
-        password: PROXY_PASS,
+        password: PROXY_PASS
       });
     }
-
-    // Make it look like a real desktop browser
-    await page.setViewport({ width: 1366, height: 900 });
-    await page.emulateMediaFeatures([
-      { name: "prefers-color-scheme", value: "light" },
-    ]);
-
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, "webdriver", {
-        get: () => false,
-      });
-    });
 
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
     );
+
+    await page.setViewport({ width: 1920, height: 1080 });
 
     log(`Plan contains ${plan.length} steps`);
 
@@ -115,23 +108,19 @@ app.post("/run", async (req, res) => {
         log("Opening page: " + step.url);
 
         await page.goto(step.url, {
-          waitUntil: "domcontentloaded",
-          timeout: 60000,
+          waitUntil: "networkidle2",
+          timeout: 90000
         });
 
-        await wait(3000);
+        await humanDelay();
         log("Auto scrolling...");
         await autoScroll(page);
-        await wait(2000);
+        await humanDelay();
       }
 
       // WAIT
       else if (step.action === "wait") {
-        const ms =
-          step.milliseconds ||
-          (typeof step.duration === "string"
-            ? parseInt(step.duration) * 1000
-            : 0);
+        const ms = step.milliseconds || (step.duration ? step.duration * 1000 : 2000);
         log(`Waiting ${ms}ms`);
         await wait(ms);
       }
@@ -141,87 +130,51 @@ app.post("/run", async (req, res) => {
         log("Extracting list...");
         const url = page.url();
 
-        // ============== AMAZON ==================
+        // ================= AMAZON =================
         if (url.includes("amazon.")) {
-          log("Amazon REAL DOM extractor");
+          log("Amazon extractor active");
 
-          // Wait for main result grid
-          await page.waitForSelector("div.s-main-slot", { timeout: 25000 });
-
-          // Extra scroll passes to force lazy-load
-          await autoScroll(page);
-          await autoScroll(page);
+          const ok = await safeWaitSelector(page, "div[data-component-type='s-search-result']");
+          if (!ok) log("Amazon selector not found - continuing anyway");
 
           extracted = await page.evaluate(() => {
-            const products = document.querySelectorAll(
-              "div[data-component-type='s-search-result']"
-            );
-
-            return Array.from(products)
-              .map((el) => {
-                const title = el.querySelector("h2 span")?.innerText?.trim();
-                const priceWhole =
-                  el.querySelector(".a-price-whole")?.innerText || null;
-                const priceFraction =
-                  el.querySelector(".a-price-fraction")?.innerText || "";
-                const image = el.querySelector("img")?.src || null;
-                const url =
-                  el.querySelector("a.a-link-normal")?.href ||
-                  el.querySelector("h2 a")?.href ||
-                  null;
-
-                if (!title) return null;
-
-                const price = priceWhole
-                  ? `${priceWhole}${priceFraction ? "." + priceFraction : ""}`
-                  : null;
-
-                return {
-                  title,
-                  price,
-                  url,
-                  image,
-                };
-              })
-              .filter((x) => x && x.title);
+            return Array.from(document.querySelectorAll("div[data-component-type='s-search-result']"))
+              .map(el => ({
+                title: el.querySelector("h2 span")?.innerText?.trim(),
+                price: el.querySelector(".a-price-whole")?.innerText?.replace(/\s/g, ""),
+                url: el.querySelector("h2 a")?.href,
+                image: el.querySelector("img")?.src
+              }))
+              .filter(item => item.title);
           });
         }
 
-        // ============== ZILLOW ==================
+        // ================= ZILLOW =================
         else if (url.includes("zillow.com")) {
-          log("Zillow REAL DOM extractor");
+          log("Zillow extractor active");
 
-          await page.waitForSelector("article", { timeout: 25000 });
-          await autoScroll(page);
+          const ok = await safeWaitSelector(page, "article");
+          if (!ok) log("Zillow selector not found - continuing anyway");
 
           extracted = await page.evaluate(() => {
-            const cards = document.querySelectorAll("article");
-
-            return Array.from(cards)
-              .map((card) => {
-                const title = card.querySelector("address")?.innerText || null;
-                const price =
-                  card.querySelector(
-                    "span[data-test='property-price'], span[data-test='property-card-price']"
-                  )?.innerText || null;
-                const url = card.querySelector("a")?.href || null;
-                const image = card.querySelector("img")?.src || null;
-
-                if (!title) return null;
-
-                return { title, price, url, image };
-              })
-              .filter((x) => x && x.title);
+            return Array.from(document.querySelectorAll("article"))
+              .map(card => ({
+                title: card.querySelector("address")?.innerText?.trim(),
+                price: card.querySelector("[data-test='property-price']")?.innerText?.trim(),
+                url: card.querySelector("a")?.href,
+                image: card.querySelector("img")?.src
+              }))
+              .filter(x => x.title);
           });
         }
 
-        // ============== HN + GENERIC =============
+        // ================= GENERIC =================
         else {
           const selector = step.selector || "a";
-          extracted = await page.$$eval(selector, (els) =>
-            els.map((el) => ({
+          extracted = await page.$$eval(selector, els =>
+            els.map(el => ({
               text: el.innerText?.trim(),
-              href: el.href,
+              href: el.href
             }))
           );
         }
@@ -244,6 +197,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Runner backend listening on port " + PORT);
 });
-
 
 
