@@ -113,7 +113,7 @@ app.post("/run", async (req, res) => {
           timeout: 60000,
         });
 
-        await new Promise((r) => setTimeout(r, 2000));
+        await new Promise((r) => setTimeout(r, 2500));
 
         log("Scrolling page to load dynamic content...");
         await autoScroll(page);
@@ -135,7 +135,7 @@ app.post("/run", async (req, res) => {
       }
 
       // ---------------------------
-      // extract_list (SMART VERSION)
+      // extract_list (FIXED VERSION)
       // ---------------------------
       else if (step.action === "extract_list") {
         log("Extracting list…");
@@ -143,54 +143,66 @@ app.post("/run", async (req, res) => {
         const domain = page.url();
 
         extracted = await retry(async () => {
-          // AMAZON
+          // ================= AMAZON =================
           if (domain.includes("amazon.")) {
-            log("Using Amazon extractor");
+            log("Using SHA-hardened Amazon extractor");
 
-            await waitForSelectorSafe(
-              page,
-              "[data-component-type='s-search-result']"
-            );
+            await new Promise((r) => setTimeout(r, 3000));
 
             return await page.evaluate(() => {
-              const items = document.querySelectorAll(
-                "[data-component-type='s-search-result']"
-              );
-              return [...items]
-                .map((node) => ({
-                  title: node.querySelector("h2 span")?.innerText?.trim(),
-                  price: node.querySelector(".a-price-whole")?.innerText,
-                  url: node.querySelector("h2 a")?.href,
-                  image: node.querySelector("img")?.src,
-                }))
-                .filter((x) => x.title);
+              const results = [];
+              const cards = document.querySelectorAll("div.s-result-item");
+
+              cards.forEach(card => {
+                const title = card.querySelector("h2")?.innerText;
+                const priceWhole = card.querySelector(".a-price-whole")?.innerText;
+                const priceFraction = card.querySelector(".a-price-fraction")?.innerText;
+                const image = card.querySelector("img")?.src;
+                const url = card.querySelector("a.a-link-normal")?.href;
+
+                if (title) {
+                  results.push({
+                    title,
+                    price: priceWhole ? `$${priceWhole}.${priceFraction || "00"}` : null,
+                    image,
+                    url
+                  });
+                }
+              });
+
+              return results;
             });
           }
 
-          // ZILLOW
+          // ================= ZILLOW =================
           if (domain.includes("zillow.com")) {
-            log("Using Zillow extractor");
-
-            await waitForSelectorSafe(page, "article");
+            log("Using Zillow DATA-LAYER extractor");
 
             return await page.evaluate(() => {
-              const cards = document.querySelectorAll("article");
-              return [...cards]
-                .map((card) => ({
-                  title: card.querySelector("address")?.innerText,
-                  price: card.querySelector(
-                    "span[data-test='property-price']"
-                  )?.innerText,
-                  url: card.querySelector(
-                    "a[data-test='property-card-link']"
-                  )?.href,
-                  image: card.querySelector("img")?.src,
-                }))
-                .filter((x) => x.title);
+              try {
+                const state =
+                  window.__INITIAL_STATE__ ||
+                  window.__ZILLOW_GLOBALS__ ||
+                  window.App?.state;
+
+                const results =
+                  state?.searchPageState?.cat1?.searchResults?.listResults || [];
+
+                return results.map(item => ({
+                  title: item.address,
+                  price: item.price,
+                  url: item.detailUrl
+                    ? "https://www.zillow.com" + item.detailUrl
+                    : null,
+                  image: item.imgSrc
+                }));
+              } catch (e) {
+                return [];
+              }
             });
           }
 
-          // HACKER NEWS / FALLBACK
+          // ============ FALLBACK GENERIC ============
           log("Using generic extractor");
           const selector = step.selector || "a";
 
