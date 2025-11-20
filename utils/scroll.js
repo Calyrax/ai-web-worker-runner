@@ -1,10 +1,12 @@
-// utils/scroll.js
+// utils/scroll.js - Puppeteer v22 SAFE
 
 export async function autoScroll(page, maxScroll = 20) {
   for (let i = 0; i < maxScroll; i++) {
     await page.evaluate(() => {
       window.scrollBy(0, window.innerHeight);
     });
-    await page.waitForTimeout(700 + Math.random() * 300);
+
+    // Safe delay replacement for waitForTimeout
+    await new Promise(resolve => setTimeout(resolve, 800));
   }
 }
