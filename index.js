@@ -76,12 +76,25 @@ app.post("/run", async (req, res) => {
 
     const page = await browser.newPage();
 
+    // Proxy auth
     if (PROXY_USER && PROXY_PASS) {
       await page.authenticate({
         username: PROXY_USER,
         password: PROXY_PASS,
       });
     }
+
+    // Make it look like a real desktop browser
+    await page.setViewport({ width: 1366, height: 900 });
+    await page.emulateMediaFeatures([
+      { name: "prefers-color-scheme", value: "light" },
+    ]);
+
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", {
+        get: () => false,
+      });
+    });
 
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
@@ -128,49 +141,87 @@ app.post("/run", async (req, res) => {
         log("Extracting list...");
         const url = page.url();
 
-        // AMAZON
+        // ============== AMAZON ==================
         if (url.includes("amazon.")) {
-          log("Amazon extractor active");
+          log("Amazon REAL DOM extractor");
 
-          await waitForSelectorSafe(page, "[data-component-type='s-search-result']");
+          // Wait for main result grid
+          await page.waitForSelector("div.s-main-slot", { timeout: 25000 });
+
+          // Extra scroll passes to force lazy-load
+          await autoScroll(page);
+          await autoScroll(page);
 
           extracted = await page.evaluate(() => {
-            return [...document.querySelectorAll("[data-component-type='s-search-result']")]
-              .map(el => ({
-                title: el.querySelector("h2 span")?.innerText,
-                price: el.querySelector(".a-price-whole")?.innerText,
-                url: el.querySelector("h2 a")?.href,
-                image: el.querySelector("img")?.src
-              }))
-              .filter(x => x.title);
+            const products = document.querySelectorAll(
+              "div[data-component-type='s-search-result']"
+            );
+
+            return Array.from(products)
+              .map((el) => {
+                const title = el.querySelector("h2 span")?.innerText?.trim();
+                const priceWhole =
+                  el.querySelector(".a-price-whole")?.innerText || null;
+                const priceFraction =
+                  el.querySelector(".a-price-fraction")?.innerText || "";
+                const image = el.querySelector("img")?.src || null;
+                const url =
+                  el.querySelector("a.a-link-normal")?.href ||
+                  el.querySelector("h2 a")?.href ||
+                  null;
+
+                if (!title) return null;
+
+                const price = priceWhole
+                  ? `${priceWhole}${priceFraction ? "." + priceFraction : ""}`
+                  : null;
+
+                return {
+                  title,
+                  price,
+                  url,
+                  image,
+                };
+              })
+              .filter((x) => x && x.title);
           });
         }
 
-        // ZILLOW
+        // ============== ZILLOW ==================
         else if (url.includes("zillow.com")) {
-          log("Zillow extractor active");
+          log("Zillow REAL DOM extractor");
 
-          await waitForSelectorSafe(page, "article");
+          await page.waitForSelector("article", { timeout: 25000 });
+          await autoScroll(page);
 
           extracted = await page.evaluate(() => {
-            return [...document.querySelectorAll("article")]
-              .map(card => ({
-                title: card.querySelector("address")?.innerText,
-                price: card.querySelector("span[data-test='property-price']")?.innerText,
-                url: card.querySelector("a")?.href,
-                image: card.querySelector("img")?.src
-              }))
-              .filter(x => x.title);
+            const cards = document.querySelectorAll("article");
+
+            return Array.from(cards)
+              .map((card) => {
+                const title = card.querySelector("address")?.innerText || null;
+                const price =
+                  card.querySelector(
+                    "span[data-test='property-price'], span[data-test='property-card-price']"
+                  )?.innerText || null;
+                const url = card.querySelector("a")?.href || null;
+                const image = card.querySelector("img")?.src || null;
+
+                if (!title) return null;
+
+                return { title, price, url, image };
+              })
+              .filter((x) => x && x.title);
           });
         }
 
-        // HN + GENERIC
+        // ============== HN + GENERIC =============
         else {
           const selector = step.selector || "a";
-          extracted = await page.$$eval(selector, els =>
-            els.map(el => ({
+          extracted = await page.$$eval(selector, (els) =>
+            els.map((el) => ({
               text: el.innerText?.trim(),
-              href: el.href
+              href: el.href,
             }))
           );
         }
