@@ -5,8 +5,8 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 
-# THIS IS THE FIX THAT PREVENTS YOUR ERROR
-RUN npx playwright install chromium
+# 👇 cache-busting install (forces fresh browser download)
+RUN echo "FORCE PLAYWRIGHT REINSTALL $(date)" && npx playwright install chromium
 
 COPY . .
 
