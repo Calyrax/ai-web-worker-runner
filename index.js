@@ -17,35 +17,41 @@ app.post("/run", async (req, res) => {
   let results = [];
 
   try {
-    logs.push("🚀 Launching Chrome with Smartproxy...");
+    logs.push("🚀 Launching hardened Chromium...");
 
-    let browser;
-    try {
-      browser = await chromium.launch({
-        headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
-      });
-    } catch (err) {
-      logs.push("⚠️ Proxy failed. Retrying without proxy...");
-      browser = await chromium.launch({ headless: true });
-    }
+    const browser = await chromium.launch({
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--no-zygote",
+        "--single-process"
+      ]
+    });
 
-    const page = await browser.newPage();
+    const page = await browser.newPage({
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+    });
 
     for (const step of plan) {
       if (step.action === "open_page") {
         logs.push(`🌐 Opening ${step.url}`);
-        await page.goto(step.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await page.goto(step.url, {
+          waitUntil: "domcontentloaded",
+          timeout: 45000
+        });
         await page.waitForTimeout(2000);
       }
 
       if (step.action === "extract_list") {
         logs.push("🔍 Extracting content...");
 
-        const extracted = await page.evaluate(() => {
+        const extracted = await page.evaluate((limit) => {
           const items = [];
 
-          // Hacker News support
           document.querySelectorAll(".athing .titleline > a").forEach(a => {
             items.push({
               title: a.innerText.trim(),
@@ -53,7 +59,6 @@ app.post("/run", async (req, res) => {
             });
           });
 
-          // Fallback generic extraction
           if (items.length === 0) {
             document.querySelectorAll("a").forEach(a => {
               if (a.innerText.trim().length > 20) {
@@ -65,8 +70,8 @@ app.post("/run", async (req, res) => {
             });
           }
 
-          return items.slice(0, step.limit || 30);
-        });
+          return items.slice(0, limit || 30);
+        }, step.limit);
 
         results = extracted;
         logs.push(`✅ Extracted ${results.length} items`);
@@ -75,10 +80,7 @@ app.post("/run", async (req, res) => {
 
     await browser.close();
 
-    res.json({
-      logs,
-      results
-    });
+    res.json({ logs, results });
 
   } catch (error) {
     logs.push("❌ Runtime error: " + error.message);
