@@ -6,7 +6,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Health check
 app.get("/", (req, res) => {
   res.send("Runner is alive ✅");
 });
@@ -29,16 +28,9 @@ app.post("/run", async (req, res) => {
     logs.push("🚀 Launching Chromium...");
     console.log("🚀 Launching Chromium...");
 
-    // ✅ FORCE SYSTEM CHROMIUM (THIS IS THE FIX)
     browser = await chromium.launch({
-  headless: true,
-  args: [
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage"
-  ]
-});
-
+      headless: true
+    });
 
     const context = await browser.newContext({
       userAgent:
@@ -109,12 +101,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Runner live on port ${PORT}`);
 });
-
-
-
-
-
-
-
-
 

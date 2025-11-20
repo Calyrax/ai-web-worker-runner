@@ -5,10 +5,12 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm install
 
-# ✅ Force Playwright to use bundled browsers
-ENV PLAYWRIGHT_BROWSERS_PATH=0
+# ✅ Force download of Chromium binary Playwright expects
+RUN npx playwright install --with-deps chromium
 
 COPY . .
+
+ENV PLAYWRIGHT_BROWSERS_PATH=0
 
 EXPOSE 3000
 CMD ["node", "index.js"]
