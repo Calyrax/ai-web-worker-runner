@@ -103,7 +103,7 @@ app.post("/run", async (req, res) => {
       log(`--- Step ${i + 1}/${plan.length} ---`);
       log(JSON.stringify(step));
 
-      // OPEN PAGE
+      // ================= OPEN PAGE =================
       if (step.action === "open_page") {
         log("Opening page: " + step.url);
 
@@ -118,19 +118,40 @@ app.post("/run", async (req, res) => {
         await humanDelay();
       }
 
-      // WAIT
+      // ================= WAIT (FIXED & SAFE) =================
       else if (step.action === "wait") {
-        const ms = step.milliseconds || (step.duration ? step.duration * 1000 : 2000);
+        let ms = 2000;
+
+        if (step.milliseconds && !isNaN(step.milliseconds)) {
+          ms = Number(step.milliseconds);
+        } 
+        else if (typeof step.duration === "string") {
+          const lower = step.duration.toLowerCase();
+
+          if (lower.includes("second")) {
+            ms = parseInt(lower) * 1000;
+          } 
+          else if (lower.includes("ms")) {
+            ms = parseInt(lower);
+          } 
+          else if (!isNaN(lower)) {
+            ms = parseInt(lower);
+          }
+        } 
+        else if (typeof step.duration === "number") {
+          ms = step.duration * 1000;
+        }
+
         log(`Waiting ${ms}ms`);
         await wait(ms);
       }
 
-      // EXTRACT LIST
+      // ================= EXTRACT LIST =================
       else if (step.action === "extract_list") {
         log("Extracting list...");
         const url = page.url();
 
-        // ================= AMAZON =================
+        // ----------- AMAZON ----------
         if (url.includes("amazon.")) {
           log("Amazon extractor active");
 
@@ -149,7 +170,7 @@ app.post("/run", async (req, res) => {
           });
         }
 
-        // ================= ZILLOW =================
+        // ----------- ZILLOW ----------
         else if (url.includes("zillow.com")) {
           log("Zillow extractor active");
 
@@ -168,7 +189,7 @@ app.post("/run", async (req, res) => {
           });
         }
 
-        // ================= GENERIC =================
+        // ----------- GENERIC ----------
         else {
           const selector = step.selector || "a";
           extracted = await page.$$eval(selector, els =>
@@ -185,9 +206,11 @@ app.post("/run", async (req, res) => {
     }
 
     return res.json({ logs, result: extracted });
+
   } catch (err) {
     logs.push("FATAL ERROR: " + err.message);
     return res.status(500).json({ error: err.message, logs });
+
   } finally {
     if (browser) await browser.close();
   }
@@ -197,5 +220,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Runner backend listening on port " + PORT);
 });
+
 
 
