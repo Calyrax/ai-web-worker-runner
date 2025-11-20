@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import { chromium } from "playwright";
+import fs from "fs";
 
 const app = express();
 app.use(cors());
@@ -14,37 +15,34 @@ app.post("/run", async (req, res) => {
   console.log("🔥 /run endpoint hit");
 
   const { plan } = req.body;
-  console.log("📦 Received plan:", plan);
-
-  if (!Array.isArray(plan)) {
-    return res.status(400).json({ error: "Invalid plan format" });
-  }
-
   const logs = [];
   let browser;
 
   try {
-    logs.push("🚀 Launching Chromium...");
+    // ✅ Verify Chromium exists
+    if (!fs.existsSync("/usr/bin/chromium")) {
+      throw new Error("System Chromium missing at /usr/bin/chromium");
+    }
+
+    logs.push("✅ System Chromium detected");
 
     browser = await chromium.launch({
+      executablePath: "/usr/bin/chromium",
       headless: true,
       args: [
         "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage"
+        "--disable-dev-shm-usage",
+        "--disable-setuid-sandbox"
       ]
     });
 
-    const context = await browser.newContext();
-    const page = await context.newPage();
-
-    let results = [];
+    const page = await browser.newPage();
 
     for (const step of plan) {
 
       if (step.action === "open_page") {
         logs.push(`🌐 Opening ${step.url}`);
-        await page.goto(step.url, { waitUntil: "domcontentloaded", timeout: 60000 });
+        await page.goto(step.url, { waitUntil: "domcontentloaded" });
       }
 
       if (step.action === "wait") {
@@ -52,36 +50,33 @@ app.post("/run", async (req, res) => {
       }
 
       if (step.action === "extract_list") {
-        logs.push("🔍 Extracting list...");
+        logs.push("🔍 Extracting...");
 
-        const extracted = await page.evaluate((limit) => {
-          const items = [];
-
-          document.querySelectorAll("a").forEach(a => {
-            const text = a.innerText?.trim();
-            if (text && text.length > 15 && a.href.startsWith("http")) {
-              items.push({ title: text, link: a.href });
-            }
-          });
-
-          return items.slice(0, limit || 30);
+        const results = await page.evaluate((limit) => {
+          return Array.from(document.querySelectorAll("a"))
+            .filter(a => a.innerText.length > 10)
+            .slice(0, limit || 30)
+            .map(a => ({
+              title: a.innerText.trim(),
+              link: a.href
+            }));
         }, step.limit);
 
-        results = extracted;
         logs.push(`✅ Extracted ${results.length} items`);
+        await browser.close();
+        return res.json({ logs, results });
       }
     }
 
-    await browser.close();
-    res.json({ logs, results });
-
   } catch (err) {
-    console.error("❌ FAILURE:", err);
+    console.error("❌ FAILURE:", err.message);
     if (browser) await browser.close();
     res.status(500).json({ error: err.message, logs });
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Runner live on port ${PORT}`));
+app.listen(process.env.PORT || 3000, () => {
+  console.log("Runner live ✅");
+});
+
 
