@@ -36,7 +36,7 @@ async function retry(fn, attempts = 3, delay = 800) {
   }
 }
 
-async function waitForSelectorSafe(page, selector, timeout = 10000) {
+async function waitForSelectorSafe(page, selector, timeout = 15000) {
   try {
     await page.waitForSelector(selector, { timeout });
     return true;
@@ -87,7 +87,7 @@ app.post("/run", async (req, res) => {
 
     await page.setViewport({ width: 1920, height: 1080 });
 
-    // Extra anti-bot tweak: hide webdriver flag
+    // Hide webdriver flag
     await page.evaluateOnNewDocument(() => {
       Object.defineProperty(navigator, "webdriver", {
         get: () => undefined,
@@ -123,10 +123,16 @@ app.post("/run", async (req, res) => {
           timeout: 60000,
         });
 
-        await new Promise((r) => setTimeout(r, 2500));
+        // Increased delay for anti-bot negotiation
+        await new Promise((r) => setTimeout(r, 5000));
 
         log("Scrolling page to load dynamic content...");
         await autoScroll(page);
+
+        // Simulate human mouse movement
+        await page.mouse.move(200, 300);
+        await page.mouse.move(400, 500);
+        await page.mouse.move(600, 200);
 
         screenshots.push(await takeScreenshot(page));
       }
@@ -145,7 +151,7 @@ app.post("/run", async (req, res) => {
       }
 
       // ---------------------------
-      // extract_list (FORCE RENDER VERSION)
+      // extract_list (FINAL FORCE MODE)
       // ---------------------------
       else if (step.action === "extract_list") {
         log("Extracting list…");
@@ -157,7 +163,12 @@ app.post("/run", async (req, res) => {
           if (domain.includes("amazon.")) {
             log("Amazon FORCE render extractor");
 
-            await page.waitForSelector("div.s-main-slot", { timeout: 15000 });
+            await Promise.race([
+              page.waitForSelector("div.s-main-slot"),
+              page.waitForSelector("div.sg-col-inner"),
+              page.waitForSelector("span.a-size-medium"),
+            ]);
+
             await autoScroll(page, 30);
 
             return await page.evaluate(() => {
@@ -263,5 +274,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Runner backend listening on port " + PORT);
 });
+
 
 
