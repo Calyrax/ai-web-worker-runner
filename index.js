@@ -1,6 +1,7 @@
 // ================================
-// AI WEB WORKER RUNNER (SMARTPROXY + PUPPETEER 22)
-// HARDENED VERSION – RELIABLE AMAZON + ZILLOW EXTRACTION
+// AI WEB WORKER RUNNER
+// SMARTPROXY + PUPPETEER 22
+// FULL HARDENED EXTRACTION ENGINE
 // ================================
 
 import express from "express";
@@ -16,24 +17,36 @@ app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
 // ================================
-// ENV PROXY CONFIG (FROM RAILWAY VARIABLES)
+// ENV PROXY CONFIG
 // ================================
 const PROXY_HOST = process.env.PROXY_HOST;
 const PROXY_PORT = process.env.PROXY_PORT;
 const PROXY_USER = process.env.PROXY_USER;
 const PROXY_PASS = process.env.PROXY_PASS;
 
-// Health check
+// ================================
+// HEALTH CHECK
+// ================================
 app.get("/", (req, res) => {
   res.json({ status: "runner-online" });
 });
 
-// --------------------------------------
-// Helpers
-// --------------------------------------
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+// ================================
+// HELPERS
+// ================================
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
-async function safeWaitSelector(page, selector, timeout = 30000) {
+const parseWaitTime = (step) => {
+  if (step.milliseconds) return step.milliseconds;
+  if (typeof step.duration === "string") {
+    const num = parseInt(step.duration.replace(/[^0-9]/g, ""));
+    return num * 1000;
+  }
+  if (typeof step.duration === "number") return step.duration * 1000;
+  return 2000;
+};
+
+async function safeWaitSelector(page, selector, timeout = 15000) {
   try {
     await page.waitForSelector(selector, { timeout, visible: true });
     return true;
@@ -42,13 +55,11 @@ async function safeWaitSelector(page, selector, timeout = 30000) {
   }
 }
 
-async function humanDelay() {
-  await wait(800 + Math.random() * 1200);
-}
+const humanDelay = () => wait(800 + Math.random() * 1300);
 
-// --------------------------------------
+// ================================
 // MAIN RUNNER
-// --------------------------------------
+// ================================
 app.post("/run", async (req, res) => {
   const plan = req.body.plan;
   if (!Array.isArray(plan)) {
@@ -93,9 +104,9 @@ app.post("/run", async (req, res) => {
 
     await page.setViewport({ width: 1920, height: 1080 });
 
-    log(`Plan contains ${plan.length} steps`);
-
     let extracted = [];
+
+    log(`Plan contains ${plan.length} steps`);
 
     for (let i = 0; i < plan.length; i++) {
       const step = plan[i];
@@ -103,7 +114,9 @@ app.post("/run", async (req, res) => {
       log(`--- Step ${i + 1}/${plan.length} ---`);
       log(JSON.stringify(step));
 
-      // ================= OPEN PAGE =================
+      // ================================
+      // OPEN PAGE
+      // ================================
       if (step.action === "open_page") {
         log("Opening page: " + step.url);
 
@@ -118,78 +131,72 @@ app.post("/run", async (req, res) => {
         await humanDelay();
       }
 
-      // ================= WAIT (FIXED & SAFE) =================
+      // ================================
+      // WAIT
+      // ================================
       else if (step.action === "wait") {
-        let ms = 2000;
-
-        if (step.milliseconds && !isNaN(step.milliseconds)) {
-          ms = Number(step.milliseconds);
-        } 
-        else if (typeof step.duration === "string") {
-          const lower = step.duration.toLowerCase();
-
-          if (lower.includes("second")) {
-            ms = parseInt(lower) * 1000;
-          } 
-          else if (lower.includes("ms")) {
-            ms = parseInt(lower);
-          } 
-          else if (!isNaN(lower)) {
-            ms = parseInt(lower);
-          }
-        } 
-        else if (typeof step.duration === "number") {
-          ms = step.duration * 1000;
-        }
-
+        const ms = parseWaitTime(step);
         log(`Waiting ${ms}ms`);
         await wait(ms);
       }
 
-      // ================= EXTRACT LIST =================
+      // ================================
+      // EXTRACT LIST
+      // ================================
       else if (step.action === "extract_list") {
         log("Extracting list...");
         const url = page.url();
 
-        // ----------- AMAZON ----------
+        // ================= AMAZON =================
         if (url.includes("amazon.")) {
           log("Amazon extractor active");
 
-          const ok = await safeWaitSelector(page, "div[data-component-type='s-search-result']");
-          if (!ok) log("Amazon selector not found - continuing anyway");
+          const selectors = [
+            "div[data-component-type='s-search-result']",
+            ".s-result-item"
+          ];
 
-          extracted = await page.evaluate(() => {
-            return Array.from(document.querySelectorAll("div[data-component-type='s-search-result']"))
-              .map(el => ({
-                title: el.querySelector("h2 span")?.innerText?.trim(),
-                price: el.querySelector(".a-price-whole")?.innerText?.replace(/\s/g, ""),
-                url: el.querySelector("h2 a")?.href,
-                image: el.querySelector("img")?.src
-              }))
-              .filter(item => item.title);
-          });
+          let items = [];
+
+          for (const sel of selectors) {
+            const found = await safeWaitSelector(page, sel);
+            if (found) {
+              items = await page.$$eval(sel, cards =>
+                cards.map(el => ({
+                  title: el.querySelector("h2 span")?.innerText?.trim(),
+                  price: el.querySelector(".a-price-whole")?.innerText?.trim(),
+                  url: el.querySelector("h2 a")?.href,
+                  image: el.querySelector("img")?.src
+                })).filter(p => p.title)
+              );
+
+              if (items.length > 0) {
+                log(`Amazon matched selector: ${sel}`);
+                break;
+              }
+            }
+          }
+
+          extracted = items;
         }
 
-        // ----------- ZILLOW ----------
+        // ================= ZILLOW =================
         else if (url.includes("zillow.com")) {
           log("Zillow extractor active");
 
-          const ok = await safeWaitSelector(page, "article");
-          if (!ok) log("Zillow selector not found - continuing anyway");
+          await safeWaitSelector(page, "article");
 
           extracted = await page.evaluate(() => {
-            return Array.from(document.querySelectorAll("article"))
-              .map(card => ({
-                title: card.querySelector("address")?.innerText?.trim(),
-                price: card.querySelector("[data-test='property-price']")?.innerText?.trim(),
-                url: card.querySelector("a")?.href,
-                image: card.querySelector("img")?.src
-              }))
-              .filter(x => x.title);
+            return Array.from(document.querySelectorAll("article")).map(card => ({
+              title: card.querySelector("address")?.innerText?.trim(),
+              price: card.querySelector("[data-test='property-price']")?.innerText?.trim(),
+              url: card.querySelector("a")?.href,
+              image: card.querySelector("img")?.src
+            })).filter(x => x.title);
           });
         }
 
-        // ----------- GENERIC ----------
+        // ================= GENERIC =================
         else {
           const selector = step.selector || "a";
           extracted = await page.$$eval(selector, els =>
@@ -216,6 +223,9 @@ app.post("/run", async (req, res) => {
   }
 });
 
+// ================================
+// SERVER START
+// ================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Runner backend listening on port " + PORT);
