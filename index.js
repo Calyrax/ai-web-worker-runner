@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import { chromium } from "playwright";
-import fs from "fs";
 
 const app = express();
 app.use(cors());
@@ -15,85 +14,94 @@ app.post("/run", async (req, res) => {
   console.log("🔥 /run endpoint hit");
 
   const { plan } = req.body;
+  console.log("📦 Received plan:", plan);
+
+  if (!plan || !Array.isArray(plan)) {
+    return res.status(400).json({ error: "Invalid plan format" });
+  }
+
   const logs = [];
+  let results = [];
   let browser;
 
   try {
-    // ✅ Verify Chromium exists
-    if (!fs.existsSync("/usr/bin/chromium")) {
-      throw new Error("System Chromium missing at /usr/bin/chromium");
-    }
-
-    logs.push("✅ System Chromium detected");
+    logs.push("🚀 Launching Chromium...");
 
     browser = await chromium.launch({
-      executablePath: "/usr/bin/chromium",
       headless: true,
       args: [
         "--no-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-setuid-sandbox"
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage"
       ]
     });
 
-    const page = await browser.newPage();
+    const context = await browser.newContext({
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+    });
+
+    const page = await context.newPage();
 
     for (const step of plan) {
 
       if (step.action === "open_page") {
         logs.push(`🌐 Opening ${step.url}`);
-        await page.goto(step.url, { waitUntil: "domcontentloaded" });
+        await page.goto(step.url, {
+          waitUntil: "domcontentloaded",
+          timeout: 60000
+        });
       }
 
       if (step.action === "wait") {
-  let delay = step.duration || step.time || 2000;
+        // ✅ SAFETY FIX: convert strings like "3 seconds" → 3000
+        let ms = step.duration || 2000;
 
-  // Convert "3 seconds" or "5s" to milliseconds
-  if (typeof delay === "string") {
-    const cleaned = delay.toLowerCase().trim();
+        if (typeof ms === "string") {
+          const num = parseInt(ms.replace(/[^\d]/g, ""));
+          ms = isNaN(num) ? 2000 : num * 1000;
+        }
 
-    if (cleaned.includes("second")) {
-      delay = parseInt(cleaned) * 1000;
-    } else if (cleaned.endsWith("s")) {
-      delay = parseInt(cleaned) * 1000;
-    } else {
-      delay = parseInt(cleaned);
-    }
-  }
-
-  if (isNaN(delay)) delay = 2000;
-
-  await page.waitForTimeout(delay);
-}
+        await page.waitForTimeout(ms);
+      }
 
       if (step.action === "extract_list") {
-        logs.push("🔍 Extracting...");
+        logs.push("🔍 Extracting list...");
 
-        const results = await page.evaluate((limit) => {
-          return Array.from(document.querySelectorAll("a"))
-            .filter(a => a.innerText.length > 10)
-            .slice(0, limit || 30)
-            .map(a => ({
-              title: a.innerText.trim(),
-              link: a.href
-            }));
-        }, step.limit);
+        await page.waitForSelector("a", { timeout: 15000 });
 
+        const extracted = await page.evaluate((limit) => {
+          const items = [];
+
+          document.querySelectorAll("a").forEach(a => {
+            const text = a.innerText?.trim();
+            if (text && text.length > 15 && a.href.startsWith("http")) {
+              items.push({
+                title: text,
+                link: a.href
+              });
+            }
+          });
+
+          return items.slice(0, limit || 30);
+        }, step.limit || step.count);
+
+        results = extracted;
         logs.push(`✅ Extracted ${results.length} items`);
-        await browser.close();
-        return res.json({ logs, results });
       }
     }
 
+    await browser.close();
+    res.json({ logs, results });
+
   } catch (err) {
-    console.error("❌ FAILURE:", err.message);
+    console.error("❌ FAILURE:", err);
     if (browser) await browser.close();
     res.status(500).json({ error: err.message, logs });
   }
 });
 
-app.listen(process.env.PORT || 3000, () => {
-  console.log("Runner live ✅");
-});
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Runner live on port ${PORT}`));
 
 
