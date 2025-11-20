@@ -8,6 +8,8 @@ import cors from "cors";
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 
+import { autoScroll } from "./utils/scroll.js";
+
 puppeteer.use(StealthPlugin());
 
 const app = express();
@@ -20,6 +22,35 @@ app.get("/", (req, res) => {
 });
 
 // --------------------------------------
+// Helper utilities
+// --------------------------------------
+
+async function retry(fn, attempts = 3, delay = 800) {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (i === attempts - 1) throw err;
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+}
+
+async function waitForSelectorSafe(page, selector, timeout = 10000) {
+  try {
+    await page.waitForSelector(selector, { timeout });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function takeScreenshot(page) {
+  const base64 = await page.screenshot({ encoding: "base64", fullPage: true });
+  return `data:image/png;base64,${base64}`;
+}
+
+// --------------------------------------
 // Main execution route
 // --------------------------------------
 app.post("/run", async (req, res) => {
@@ -29,6 +60,8 @@ app.post("/run", async (req, res) => {
   }
 
   let logs = [];
+  let screenshots = [];
+
   const log = (msg) => {
     console.log(msg);
     logs.push(msg);
@@ -51,7 +84,6 @@ app.post("/run", async (req, res) => {
 
     const page = await browser.newPage();
 
-    // Spoof a real browser
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
     );
@@ -81,8 +113,12 @@ app.post("/run", async (req, res) => {
           timeout: 60000,
         });
 
-        // Puppeteer 22+ → no waitForTimeout()
         await new Promise((r) => setTimeout(r, 2000));
+
+        log("Scrolling page to load dynamic content...");
+        await autoScroll(page);
+
+        screenshots.push(await takeScreenshot(page));
       }
 
       // ---------------------------
@@ -99,40 +135,75 @@ app.post("/run", async (req, res) => {
       }
 
       // ---------------------------
-      // extract_list
+      // extract_list (SMART VERSION)
       // ---------------------------
       else if (step.action === "extract_list") {
         log("Extracting list…");
 
         const domain = page.url();
-        let selector = step.selector;
 
-        if (!selector) {
-          if (domain.includes("news.ycombinator.com")) {
-            selector = ".titleline > a";
-            log("Auto-selector: Hacker News");
-          } else if (domain.includes("amazon.com")) {
-            selector = "h2 a.a-link-normal";
-            log("Auto-selector: Amazon products");
-          } else if (domain.includes("zillow.com")) {
-            selector = ".list-card-info a";
-            log("Auto-selector: Zillow listings");
-          } else {
-            selector = "a";
-            log("Fallback selector: a");
+        extracted = await retry(async () => {
+          // AMAZON
+          if (domain.includes("amazon.")) {
+            log("Using Amazon extractor");
+
+            await waitForSelectorSafe(
+              page,
+              "[data-component-type='s-search-result']"
+            );
+
+            return await page.evaluate(() => {
+              const items = document.querySelectorAll(
+                "[data-component-type='s-search-result']"
+              );
+              return [...items]
+                .map((node) => ({
+                  title: node.querySelector("h2 span")?.innerText?.trim(),
+                  price: node.querySelector(".a-price-whole")?.innerText,
+                  url: node.querySelector("h2 a")?.href,
+                  image: node.querySelector("img")?.src,
+                }))
+                .filter((x) => x.title);
+            });
           }
-        }
 
-        log("Using selector: " + selector);
+          // ZILLOW
+          if (domain.includes("zillow.com")) {
+            log("Using Zillow extractor");
 
-        const items = await page.$$eval(selector, (els) =>
-          els.map((el) => ({
-            text: el.innerText?.trim() || "",
-            href: el.href || null,
-          }))
-        );
+            await waitForSelectorSafe(page, "article");
 
-        extracted = items.slice(0, step.limit || 20);
+            return await page.evaluate(() => {
+              const cards = document.querySelectorAll("article");
+              return [...cards]
+                .map((card) => ({
+                  title: card.querySelector("address")?.innerText,
+                  price: card.querySelector(
+                    "span[data-test='property-price']"
+                  )?.innerText,
+                  url: card.querySelector(
+                    "a[data-test='property-card-link']"
+                  )?.href,
+                  image: card.querySelector("img")?.src,
+                }))
+                .filter((x) => x.title);
+            });
+          }
+
+          // HACKER NEWS / FALLBACK
+          log("Using generic extractor");
+          const selector = step.selector || "a";
+
+          return await page.$$eval(selector, (els) =>
+            els.map((el) => ({
+              text: el.innerText?.trim() || "",
+              href: el.href || null,
+            }))
+          );
+        });
+
+        extracted = extracted.slice(0, step.limit || 20);
+
         log(
           `Extracted ${extracted.length} items — sample: ${JSON.stringify(
             extracted.slice(0, 3),
@@ -140,14 +211,16 @@ app.post("/run", async (req, res) => {
             2
           )}`
         );
-      }
-
-      else {
+      } else {
         log("Unknown action: " + step.action);
       }
     }
 
-    return res.json({ logs, result: extracted });
+    return res.json({
+      logs,
+      result: extracted,
+      screenshots,
+    });
   } catch (err) {
     console.error(err);
     logs.push("FATAL ERROR: " + err.message);
@@ -165,4 +238,5 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Runner backend listening on port " + PORT);
 });
+
 
