@@ -29,8 +29,15 @@ app.post("/run", async (req, res) => {
     console.log("🚀 Launching Chromium...");
 
     browser = await chromium.launch({
-      headless: true
-    });
+  executablePath: "/usr/bin/chromium",
+  headless: true,
+  args: [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage"
+  ]
+});
+
 
     const context = await browser.newContext({
       userAgent:
