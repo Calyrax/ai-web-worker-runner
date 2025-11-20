@@ -15,9 +15,11 @@ const PROXY_PORT = process.env.PROXY_PORT;
 const PROXY_USER = process.env.PROXY_USER;
 const PROXY_PASS = process.env.PROXY_PASS;
 
-const wait = (ms) => new Promise(r => setTimeout(r, ms));
+const wait = ms => new Promise(r => setTimeout(r, ms));
 
-app.get("/", (_, res) => res.json({ status: "runner-online" }));
+app.get("/", (req, res) => {
+  res.json({ status: "runner-online" });
+});
 
 async function launchBrowser(useProxy = true) {
   const args = [
@@ -29,11 +31,11 @@ async function launchBrowser(useProxy = true) {
   ];
 
   if (useProxy && PROXY_HOST) {
-    args.unshift(`--proxy-server=http://${PROXY_HOST}:${PROXY_PORT}`);
+    args.push(`--proxy-server=http://${PROXY_HOST}:${PROXY_PORT}`);
   }
 
   return puppeteer.launch({
-    headless: "new",
+    headless: true,
     args
   });
 }
@@ -43,77 +45,115 @@ app.post("/run", async (req, res) => {
   if (!Array.isArray(plan)) return res.status(400).json({ error: "plan must be array" });
 
   let logs = [];
-  const log = m => { console.log(m); logs.push(m); };
+  const log = msg => {
+    console.log(msg);
+    logs.push(msg);
+  };
 
   let browser;
   let page;
+  let extracted = [];
 
   try {
-    log("🚀 Launching Chrome with Smartproxy...");
-
+    log("🚀 Launching Chrome with proxy...");
     browser = await launchBrowser(true);
     page = await browser.newPage();
 
-    if (PROXY_USER) {
-      await page.authenticate({
-        username: PROXY_USER,
-        password: PROXY_PASS
-      });
+    if (PROXY_USER && PROXY_PASS) {
+      await page.authenticate({ username: PROXY_USER, password: PROXY_PASS });
     }
 
-    await page.setUserAgent("Mozilla/5.0 Chrome/120 Safari/537.36");
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+    );
 
-    let extracted = [];
+    for (let step of plan) {
 
-    for (const step of plan) {
       if (step.action === "open_page") {
-        log("🌍 Opening " + step.url);
+        log(`🌐 Opening ${step.url}`);
 
-        try {
-          await page.goto(step.url, { waitUntil: "domcontentloaded", timeout: 30000 });
-        } catch {
-          log("⚠️ Proxy failed, retrying without proxy...");
+        await page.goto(step.url, {
+          waitUntil: "domcontentloaded",
+          timeout: 60000
+        });
+
+        // 🔍 Detect Chrome error pages
+        if (page.url().startsWith("chrome-error://")) {
+          log("⚠️ Proxy failed. Retrying WITHOUT proxy...");
           await browser.close();
 
           browser = await launchBrowser(false);
           page = await browser.newPage();
-          await page.goto(step.url, { waitUntil: "domcontentloaded", timeout: 30000 });
+          await page.setUserAgent("Mozilla/5.0 Chrome/120");
+
+          await page.goto(step.url, {
+            waitUntil: "domcontentloaded",
+            timeout: 60000
+          });
         }
 
-        await wait(3000);
         await autoScroll(page);
+      }
+
+      if (step.action === "wait") {
+        const ms = step.duration ? step.duration * 1000 : 2000;
+        log(`⏳ Waiting ${ms}ms`);
+        await wait(ms);
       }
 
       if (step.action === "extract_list") {
         const url = page.url();
-        log("🔍 Extracting from " + url);
+        log(`🔍 Extracting from ${url}`);
 
         if (url.includes("ycombinator.com")) {
-          extracted = await page.evaluate(() =>
-            Array.from(document.querySelectorAll(".athing")).map(row => ({
+          extracted = await page.evaluate(() => {
+            return Array.from(document.querySelectorAll(".athing")).map(row => ({
               title: row.querySelector(".titleline a")?.innerText,
-              link: row.querySelector(".titleline a")?.href
-            })).filter(x => x.title)
-          );
+              url: row.querySelector(".titleline a")?.href
+            }));
+          });
         }
 
-        extracted = extracted.slice(0, step.limit || 20);
+        else if (url.includes("amazon.")) {
+          extracted = await page.evaluate(() => {
+            return Array.from(document.querySelectorAll("div[data-component-type='s-search-result']")).map(el => ({
+              title: el.querySelector("h2 span")?.innerText,
+              price: el.querySelector(".a-price-whole")?.innerText,
+              url: el.querySelector("h2 a")?.href,
+              image: el.querySelector("img")?.src
+            }));
+          });
+        }
+
+        else if (url.includes("zillow.com")) {
+          extracted = await page.evaluate(() => {
+            return Array.from(document.querySelectorAll("article")).map(card => ({
+              title: card.querySelector("address")?.innerText,
+              price: card.querySelector("[data-test='property-price']")?.innerText,
+              url: card.querySelector("a")?.href
+            }));
+          });
+        }
+
+        extracted = extracted.filter(Boolean).slice(0, step.limit || 30);
         log(`✅ Extracted ${extracted.length} items`);
       }
     }
 
-    res.json({ logs, result: extracted });
+    return res.json({ logs, result: extracted });
 
   } catch (err) {
-    logs.push("❌ ERROR: " + err.message);
-    res.status(500).json({ error: err.message, logs });
+    log("❌ ERROR: " + err.message);
+    return res.status(500).json({ error: err.message, logs });
+
   } finally {
     if (browser) await browser.close();
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("✅ Runner live on port " + PORT));
+app.listen(PORT, () => console.log("Runner live on port", PORT));
+
 
 
 
