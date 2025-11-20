@@ -40,9 +40,14 @@ app.post("/run", async (req, res) => {
       ]
     });
 
-    const page = await browser.newPage();
+    const page = await browser.newPage({
+      userAgent:
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+    });
 
     for (const step of plan) {
+
+      // OPEN PAGE
       if (step.action === "open_page") {
         logs.push(`🌐 Opening ${step.url}`);
         console.log("🌐 Opening:", step.url);
@@ -55,16 +60,36 @@ app.post("/run", async (req, res) => {
         await page.waitForTimeout(3000);
       }
 
+      // EXTRACT LIST
       if (step.action === "extract_list") {
         console.log("🔍 Extracting...");
 
-        const extracted = await page.evaluate(() => {
+        const extracted = await page.evaluate((limit) => {
           const items = [];
+
+          // Hacker News selector
           document.querySelectorAll(".athing .titleline > a").forEach(a => {
-            items.push({ title: a.innerText.trim(), link: a.href });
+            items.push({
+              title: a.innerText.trim(),
+              link: a.href
+            });
           });
-          return items.slice(0, 30);
-        });
+
+          // Fallback generic
+          if (items.length === 0) {
+            document.querySelectorAll("a").forEach(a => {
+              const text = a.innerText.trim();
+              if (text.length > 25) {
+                items.push({
+                  title: text,
+                  link: a.href
+                });
+              }
+            });
+          }
+
+          return items.slice(0, limit || 30);
+        }, step.limit);
 
         results = extracted;
         logs.push(`✅ Extracted ${results.length} items`);
@@ -82,10 +107,10 @@ app.post("/run", async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`✅ Runner live on port ${PORT}`);
-});
+// ✅ PORT NOW MATCHES DOCKER
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log("Runner live on port", PORT));
+
 
 
 
