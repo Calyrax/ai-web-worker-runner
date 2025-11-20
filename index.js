@@ -6,6 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Health check
 app.get("/", (req, res) => {
   res.send("Runner is alive ✅");
 });
@@ -17,7 +18,6 @@ app.post("/run", async (req, res) => {
   console.log("📦 Received plan:", plan);
 
   if (!plan || !Array.isArray(plan)) {
-    console.log("❌ Invalid plan format");
     return res.status(400).json({ error: "Invalid plan format" });
   }
 
@@ -29,25 +29,21 @@ app.post("/run", async (req, res) => {
     logs.push("🚀 Launching Chromium...");
     console.log("🚀 Launching Chromium...");
 
+    // ✅ CLEAN LAUNCH – Playwright native Chromium (correct for container)
     browser = await chromium.launch({
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--single-process"
-      ]
+      headless: true
     });
 
-    const page = await browser.newPage({
+    const context = await browser.newContext({
       userAgent:
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
     });
 
+    const page = await context.newPage();
+
     for (const step of plan) {
 
-      // OPEN PAGE
+      // ---------------- OPEN PAGE ----------------
       if (step.action === "open_page") {
         logs.push(`🌐 Opening ${step.url}`);
         console.log("🌐 Opening:", step.url);
@@ -57,17 +53,18 @@ app.post("/run", async (req, res) => {
           timeout: 45000
         });
 
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(2000);
       }
 
-      // EXTRACT LIST
+      // ---------------- EXTRACT LIST ----------------
       if (step.action === "extract_list") {
-        console.log("🔍 Extracting...");
+        logs.push("🔍 Extracting list...");
+        console.log("🔍 Extracting list...");
 
         const extracted = await page.evaluate((limit) => {
           const items = [];
 
-          // Hacker News selector
+          // Hacker News structure
           document.querySelectorAll(".athing .titleline > a").forEach(a => {
             items.push({
               title: a.innerText.trim(),
@@ -75,7 +72,7 @@ app.post("/run", async (req, res) => {
             });
           });
 
-          // Fallback generic
+          // Fallback generic extractor
           if (items.length === 0) {
             document.querySelectorAll("a").forEach(a => {
               const text = a.innerText.trim();
@@ -93,7 +90,6 @@ app.post("/run", async (req, res) => {
 
         results = extracted;
         logs.push(`✅ Extracted ${results.length} items`);
-        console.log(`✅ Extracted ${results.length} items`);
       }
     }
 
@@ -103,13 +99,19 @@ app.post("/run", async (req, res) => {
   } catch (err) {
     console.error("❌ FAILURE:", err);
     if (browser) await browser.close();
-    res.status(500).json({ error: err.message, logs });
+    res.status(500).json({
+      error: err.message,
+      logs
+    });
   }
 });
 
-// ✅ PORT NOW MATCHES DOCKER
+// ✅ Must match Docker EXPOSE
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Runner live on port", PORT));
+app.listen(PORT, () => {
+  console.log(`Runner live on port ${PORT}`);
+});
+
 
 
 
