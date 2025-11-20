@@ -1,19 +1,21 @@
 {
   "name": "ai-web-worker-runner",
   "version": "1.0.0",
+  "private": false,
   "type": "module",
   "main": "index.js",
   "scripts": {
-  "start": "node index.js",
-  "postinstall": "npx playwright install chromium"
-}
-
+    "start": "node index.js",
+    "postinstall": "npx playwright install chromium"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.19.2",
-    "puppeteer": "^22.15.0",
+    "playwright": "^1.56.1",
+    "puppeteer-core": "^22.15.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
 }
+
 
