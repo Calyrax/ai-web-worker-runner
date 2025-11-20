@@ -1,7 +1,7 @@
 // ================================
 // AI WEB WORKER RUNNER
 // SMARTPROXY + PUPPETEER 22
-// FULL HARDENED EXTRACTION ENGINE
+// STABLE EXTRACTION VERSION
 // ================================
 
 import express from "express";
@@ -17,36 +17,39 @@ app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
 // ================================
-// ENV PROXY CONFIG
+// ENV CONFIG
 // ================================
 const PROXY_HOST = process.env.PROXY_HOST;
 const PROXY_PORT = process.env.PROXY_PORT;
 const PROXY_USER = process.env.PROXY_USER;
 const PROXY_PASS = process.env.PROXY_PASS;
 
-// ================================
-// HEALTH CHECK
-// ================================
+// Health check
 app.get("/", (req, res) => {
   res.json({ status: "runner-online" });
 });
 
 // ================================
-// HELPERS
+// Helpers
 // ================================
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
-const parseWaitTime = (step) => {
+function parseWait(step) {
   if (step.milliseconds) return step.milliseconds;
+
   if (typeof step.duration === "string") {
-    const num = parseInt(step.duration.replace(/[^0-9]/g, ""));
+    const num = parseInt(step.duration);
     return num * 1000;
   }
-  if (typeof step.duration === "number") return step.duration * 1000;
-  return 2000;
-};
 
-async function safeWaitSelector(page, selector, timeout = 15000) {
+  if (typeof step.duration === "number") {
+    return step.duration;
+  }
+
+  return 2000;
+}
+
+async function safeWait(page, selector, timeout = 20000) {
   try {
     await page.waitForSelector(selector, { timeout, visible: true });
     return true;
@@ -54,8 +57,6 @@ async function safeWaitSelector(page, selector, timeout = 15000) {
     return false;
   }
 }
-
-const humanDelay = () => wait(800 + Math.random() * 1300);
 
 // ================================
 // MAIN RUNNER
@@ -104,9 +105,9 @@ app.post("/run", async (req, res) => {
 
     await page.setViewport({ width: 1920, height: 1080 });
 
-    let extracted = [];
-
     log(`Plan contains ${plan.length} steps`);
+
+    let extracted = [];
 
     for (let i = 0; i < plan.length; i++) {
       const step = plan[i];
@@ -114,9 +115,7 @@ app.post("/run", async (req, res) => {
       log(`--- Step ${i + 1}/${plan.length} ---`);
       log(JSON.stringify(step));
 
-      // ================================
       // OPEN PAGE
-      // ================================
       if (step.action === "open_page") {
         log("Opening page: " + step.url);
 
@@ -125,78 +124,64 @@ app.post("/run", async (req, res) => {
           timeout: 90000
         });
 
-        await humanDelay();
         log("Auto scrolling...");
         await autoScroll(page);
-        await humanDelay();
+        await wait(2000);
       }
 
-      // ================================
       // WAIT
-      // ================================
       else if (step.action === "wait") {
-        const ms = parseWaitTime(step);
+        const ms = parseWait(step);
         log(`Waiting ${ms}ms`);
         await wait(ms);
       }
 
-      // ================================
       // EXTRACT LIST
-      // ================================
       else if (step.action === "extract_list") {
         log("Extracting list...");
         const url = page.url();
 
-        // ================= AMAZON =================
+        // Force final scroll before extract
+        await autoScroll(page);
+        await wait(1500);
+
+        // AMAZON
         if (url.includes("amazon.")) {
           log("Amazon extractor active");
 
-          const selectors = [
-            "div[data-component-type='s-search-result']",
-            ".s-result-item"
-          ];
-
-          let items = [];
-
-          for (const sel of selectors) {
-            const found = await safeWaitSelector(page, sel);
-            if (found) {
-              items = await page.$$eval(sel, cards =>
-                cards.map(el => ({
-                  title: el.querySelector("h2 span")?.innerText?.trim(),
-                  price: el.querySelector(".a-price-whole")?.innerText?.trim(),
-                  url: el.querySelector("h2 a")?.href,
-                  image: el.querySelector("img")?.src
-                })).filter(p => p.title)
-              );
-
-              if (items.length > 0) {
-                log(`Amazon matched selector: ${sel}`);
-                break;
-              }
-            }
-          }
-
-          extracted = items;
-        }
-
-        // ================= ZILLOW =================
-        else if (url.includes("zillow.com")) {
-          log("Zillow extractor active");
-
-          await safeWaitSelector(page, "article");
+          await safeWait(page, "div[data-component-type='s-search-result']");
 
           extracted = await page.evaluate(() => {
-            return Array.from(document.querySelectorAll("article")).map(card => ({
-              title: card.querySelector("address")?.innerText?.trim(),
-              price: card.querySelector("[data-test='property-price']")?.innerText?.trim(),
-              url: card.querySelector("a")?.href,
-              image: card.querySelector("img")?.src
-            })).filter(x => x.title);
+            return Array.from(document.querySelectorAll("div[data-component-type='s-search-result']"))
+              .map(el => ({
+                title: el.querySelector("h2 span")?.innerText?.trim(),
+                price: el.querySelector(".a-price-whole")?.innerText?.replace(/\s/g, ""),
+                url: el.querySelector("h2 a")?.href,
+                image: el.querySelector("img")?.src
+              }))
+              .filter(item => item.title);
           });
         }
 
-        // ================= GENERIC =================
+        // ZILLOW
+        else if (url.includes("zillow.com")) {
+          log("Zillow extractor active");
+
+          await safeWait(page, "article");
+
+          extracted = await page.evaluate(() => {
+            return Array.from(document.querySelectorAll("article"))
+              .map(card => ({
+                title: card.querySelector("address")?.innerText?.trim(),
+                price: card.querySelector("[data-test='property-price']")?.innerText?.trim(),
+                url: card.querySelector("a")?.href,
+                image: card.querySelector("img")?.src
+              }))
+              .filter(x => x.title);
+          });
+        }
+
+        // GENERIC
         else {
           const selector = step.selector || "a";
           extracted = await page.$$eval(selector, els =>
@@ -217,15 +202,11 @@ app.post("/run", async (req, res) => {
   } catch (err) {
     logs.push("FATAL ERROR: " + err.message);
     return res.status(500).json({ error: err.message, logs });
-
   } finally {
     if (browser) await browser.close();
   }
 });
 
-// ================================
-// SERVER START
-// ================================
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Runner backend listening on port " + PORT);
