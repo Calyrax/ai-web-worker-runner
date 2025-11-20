@@ -6,19 +6,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Health check
-app.get("/", (_, res) => {
+app.get("/", (req, res) => {
   res.send("Runner is alive ✅");
 });
 
 app.post("/run", async (req, res) => {
-  console.log("🔥 /run endpoint hit");
-
   const { plan } = req.body;
-
-  if (!Array.isArray(plan)) {
-    return res.status(400).json({ error: "Invalid plan format" });
-  }
 
   const logs = [];
   let results = [];
@@ -27,13 +20,14 @@ app.post("/run", async (req, res) => {
     logs.push("🚀 Launching Chromium...");
 
     const browser = await chromium.launch({
-      headless: true
+      executablePath: "/usr/bin/chromium",
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox"]
     });
 
     const page = await browser.newPage();
 
     for (const step of plan) {
-
       if (step.action === "open_page") {
         logs.push(`🌍 Opening ${step.url}`);
         await page.goto(step.url, { waitUntil: "networkidle" });
@@ -46,11 +40,9 @@ app.post("/run", async (req, res) => {
       if (step.action === "extract_list") {
         logs.push("🔎 Extracting list...");
 
-        await page.waitForSelector("a");
-
         results = await page.evaluate((limit) => {
           return [...document.querySelectorAll("a")]
-            .filter(a => a.innerText && a.innerText.length > 20)
+            .filter(a => a.innerText.length > 20)
             .slice(0, limit || 30)
             .map(a => ({
               title: a.innerText.trim(),
@@ -68,10 +60,11 @@ app.post("/run", async (req, res) => {
     });
 
   } catch (err) {
-    console.error("❌ FAILURE:", err);
+    console.error(err);
     res.status(500).json({ error: err.message, logs });
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Runner live on port ${PORT}`));
+app.listen(PORT, () => console.log(`Runner live on ${PORT}`));
+
