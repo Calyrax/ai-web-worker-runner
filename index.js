@@ -1,13 +1,13 @@
-// ================================
+// ============================================
 // AI WEB WORKER RUNNER
-// SMARTPROXY + PUPPETEER 22
-// STABLE EXTRACTION VERSION
-// ================================
+// SMARTPROXY + PUPPETEER 22 - MAX RELIABILITY
+// ============================================
 
 import express from "express";
 import cors from "cors";
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
+import fs from "fs";
 import { autoScroll } from "./utils/scroll.js";
 
 puppeteer.use(StealthPlugin());
@@ -16,40 +16,18 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
-// ================================
-// ENV CONFIG
-// ================================
 const PROXY_HOST = process.env.PROXY_HOST;
 const PROXY_PORT = process.env.PROXY_PORT;
 const PROXY_USER = process.env.PROXY_USER;
 const PROXY_PASS = process.env.PROXY_PASS;
 
-// Health check
 app.get("/", (req, res) => {
   res.json({ status: "runner-online" });
 });
 
-// ================================
-// Helpers
-// ================================
 const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
-function parseWait(step) {
-  if (step.milliseconds) return step.milliseconds;
-
-  if (typeof step.duration === "string") {
-    const num = parseInt(step.duration);
-    return num * 1000;
-  }
-
-  if (typeof step.duration === "number") {
-    return step.duration;
-  }
-
-  return 2000;
-}
-
-async function safeWait(page, selector, timeout = 20000) {
+async function safeWait(page, selector, timeout = 30000) {
   try {
     await page.waitForSelector(selector, { timeout, visible: true });
     return true;
@@ -58,34 +36,30 @@ async function safeWait(page, selector, timeout = 20000) {
   }
 }
 
-// ================================
+// ============================================
 // MAIN RUNNER
-// ================================
+// ============================================
 app.post("/run", async (req, res) => {
   const plan = req.body.plan;
   if (!Array.isArray(plan)) {
-    return res.status(400).json({ error: "plan must be an array" });
+    return res.status(400).json({ error: "plan must be array" });
   }
 
   let logs = [];
-  const log = (msg) => {
-    console.log(msg);
-    logs.push(msg);
-  };
-
+  const log = (m) => { console.log(m); logs.push(m); };
   let browser;
 
   try {
     log("Launching Chrome with Smartproxy...");
 
     browser = await puppeteer.launch({
-      headless: true,
+      headless: "new",
       args: [
         `--proxy-server=http://${PROXY_HOST}:${PROXY_PORT}`,
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--disable-gpu",
+        "--disable-blink-features=AutomationControlled",
         "--window-size=1920,1080"
       ]
     });
@@ -93,10 +67,7 @@ app.post("/run", async (req, res) => {
     const page = await browser.newPage();
 
     if (PROXY_USER && PROXY_PASS) {
-      await page.authenticate({
-        username: PROXY_USER,
-        password: PROXY_PASS
-      });
+      await page.authenticate({ username: PROXY_USER, password: PROXY_PASS });
     }
 
     await page.setUserAgent(
@@ -105,17 +76,14 @@ app.post("/run", async (req, res) => {
 
     await page.setViewport({ width: 1920, height: 1080 });
 
-    log(`Plan contains ${plan.length} steps`);
-
     let extracted = [];
 
     for (let i = 0; i < plan.length; i++) {
       const step = plan[i];
-
       log(`--- Step ${i + 1}/${plan.length} ---`);
       log(JSON.stringify(step));
 
-      // OPEN PAGE
+      // ================= OPEN PAGE =================
       if (step.action === "open_page") {
         log("Opening page: " + step.url);
 
@@ -124,93 +92,87 @@ app.post("/run", async (req, res) => {
           timeout: 90000
         });
 
-        log("Auto scrolling...");
+        await wait(4000);
         await autoScroll(page);
-        await wait(2000);
+        await wait(3000);
       }
 
-      // WAIT
-      else if (step.action === "wait") {
-        const ms = parseWait(step);
+      // ================= WAIT =================
+      if (step.action === "wait") {
+        const ms = step.milliseconds || 3000;
         log(`Waiting ${ms}ms`);
         await wait(ms);
       }
 
-      // EXTRACT LIST
-      else if (step.action === "extract_list") {
+      // ================= EXTRACT =================
+      if (step.action === "extract_list") {
         log("Extracting list...");
         const url = page.url();
 
-        // Force final scroll before extract
-        await autoScroll(page);
-        await wait(1500);
+        // 🔎 DEBUG snapshot
+        await page.screenshot({ path: "debug.png", fullPage: true });
 
-        // AMAZON
+        // ================= AMAZON =================
         if (url.includes("amazon.")) {
           log("Amazon extractor active");
 
-          await safeWait(page, "div[data-component-type='s-search-result']");
+          const found = await safeWait(page, "div[data-component-type='s-search-result']", 40000);
+          if (!found) log("Amazon results NOT detected");
 
           extracted = await page.evaluate(() => {
-            return Array.from(document.querySelectorAll("div[data-component-type='s-search-result']"))
-              .map(el => ({
-                title: el.querySelector("h2 span")?.innerText?.trim(),
-                price: el.querySelector(".a-price-whole")?.innerText?.replace(/\s/g, ""),
-                url: el.querySelector("h2 a")?.href,
-                image: el.querySelector("img")?.src
-              }))
-              .filter(item => item.title);
+            const cards = document.querySelectorAll("div[data-component-type='s-search-result']");
+            return Array.from(cards).map(el => ({
+              title: el.querySelector("h2 span")?.innerText?.trim(),
+              price: el.querySelector(".a-price-whole")?.innerText,
+              url: el.querySelector("h2 a")?.href,
+              image: el.querySelector("img")?.src
+            })).filter(x => x.title);
           });
         }
 
-        // ZILLOW
-        else if (url.includes("zillow.com")) {
+        // ================= ZILLOW =================
+        if (url.includes("zillow.com")) {
           log("Zillow extractor active");
 
-          await safeWait(page, "article");
+          const found = await safeWait(page, "article", 40000);
+          if (!found) log("Zillow listings NOT detected");
 
           extracted = await page.evaluate(() => {
-            return Array.from(document.querySelectorAll("article"))
-              .map(card => ({
-                title: card.querySelector("address")?.innerText?.trim(),
-                price: card.querySelector("[data-test='property-price']")?.innerText?.trim(),
-                url: card.querySelector("a")?.href,
-                image: card.querySelector("img")?.src
-              }))
-              .filter(x => x.title);
+            const cards = document.querySelectorAll("article");
+            return Array.from(cards).map(el => ({
+              title: el.querySelector("address")?.innerText?.trim(),
+              price: el.querySelector("[data-test='property-price']")?.innerText,
+              url: el.querySelector("a")?.href,
+              image: el.querySelector("img")?.src
+            })).filter(x => x.title);
           });
-        }
-
-        // GENERIC
-        else {
-          const selector = step.selector || "a";
-          extracted = await page.$$eval(selector, els =>
-            els.map(el => ({
-              text: el.innerText?.trim(),
-              href: el.href
-            }))
-          );
         }
 
         extracted = extracted.slice(0, step.limit || 20);
-        log(`Extracted ${extracted.length} items`);
+        log(`✅ Extracted ${extracted.length} items`);
+
+        // If ZERO, save HTML for debug
+        if (extracted.length === 0) {
+          const html = await page.content();
+          fs.writeFileSync("debug.html", html);
+          log("⚠️ ZERO RESULTS - HTML snapshot saved");
+        }
       }
     }
 
-    return res.json({ logs, result: extracted });
+    res.json({ logs, result: extracted });
 
   } catch (err) {
-    logs.push("FATAL ERROR: " + err.message);
-    return res.status(500).json({ error: err.message, logs });
+    logs.push("FATAL: " + err.message);
+    res.status(500).json({ error: err.message, logs });
   } finally {
     if (browser) await browser.close();
   }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("Runner backend listening on port " + PORT);
-});
+app.listen(PORT, () => console.log("Runner listening on " + PORT));
+
 
 
 
