@@ -17,9 +17,7 @@ const PROXY_PASS = process.env.PROXY_PASS;
 
 const wait = ms => new Promise(r => setTimeout(r, ms));
 
-app.get("/", (req, res) => {
-  res.json({ status: "runner-online" });
-});
+app.get("/", (_, res) => res.json({ status: "runner-online" }));
 
 async function launchBrowser(useProxy = true) {
   const args = [
@@ -27,6 +25,10 @@ async function launchBrowser(useProxy = true) {
     "--disable-setuid-sandbox",
     "--disable-dev-shm-usage",
     "--disable-gpu",
+    "--disable-features=IsolateOrigins,site-per-process",
+    "--allow-running-insecure-content",
+    "--ignore-certificate-errors",
+    "--ignore-ssl-errors",
     "--window-size=1920,1080"
   ];
 
@@ -45,17 +47,14 @@ app.post("/run", async (req, res) => {
   if (!Array.isArray(plan)) return res.status(400).json({ error: "plan must be array" });
 
   let logs = [];
-  const log = msg => {
-    console.log(msg);
-    logs.push(msg);
-  };
+  const log = msg => (console.log(msg), logs.push(msg));
 
   let browser;
   let page;
   let extracted = [];
 
   try {
-    log("🚀 Launching Chrome with proxy...");
+    log("🚀 Launching Chrome with Smartproxy...");
     browser = await launchBrowser(true);
     page = await browser.newPage();
 
@@ -67,72 +66,60 @@ app.post("/run", async (req, res) => {
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
     );
 
-    for (let step of plan) {
-
+    for (const step of plan) {
       if (step.action === "open_page") {
         log(`🌐 Opening ${step.url}`);
 
-        await page.goto(step.url, {
-          waitUntil: "domcontentloaded",
-          timeout: 60000
-        });
+        await page.goto(step.url, { waitUntil: "domcontentloaded", timeout: 60000 });
 
-        // 🔍 Detect Chrome error pages
         if (page.url().startsWith("chrome-error://")) {
-          log("⚠️ Proxy failed. Retrying WITHOUT proxy...");
+          log("⚠️ Proxy SSL failed - restarting without proxy...");
           await browser.close();
 
           browser = await launchBrowser(false);
           page = await browser.newPage();
-          await page.setUserAgent("Mozilla/5.0 Chrome/120");
 
-          await page.goto(step.url, {
-            waitUntil: "domcontentloaded",
-            timeout: 60000
-          });
+          await page.goto(step.url, { waitUntil: "domcontentloaded", timeout: 60000 });
         }
 
         await autoScroll(page);
       }
 
       if (step.action === "wait") {
-        const ms = step.duration ? step.duration * 1000 : 2000;
-        log(`⏳ Waiting ${ms}ms`);
-        await wait(ms);
+        await wait(step.duration ? step.duration * 1000 : 2000);
       }
 
       if (step.action === "extract_list") {
         const url = page.url();
-        log(`🔍 Extracting from ${url}`);
+        log("🔍 Extracting from " + url);
 
         if (url.includes("ycombinator.com")) {
-          extracted = await page.evaluate(() => {
-            return Array.from(document.querySelectorAll(".athing")).map(row => ({
+          extracted = await page.evaluate(() =>
+            Array.from(document.querySelectorAll(".athing")).map(row => ({
               title: row.querySelector(".titleline a")?.innerText,
               url: row.querySelector(".titleline a")?.href
-            }));
-          });
+            }))
+          );
         }
 
         else if (url.includes("amazon.")) {
-          extracted = await page.evaluate(() => {
-            return Array.from(document.querySelectorAll("div[data-component-type='s-search-result']")).map(el => ({
+          extracted = await page.evaluate(() =>
+            Array.from(document.querySelectorAll("div[data-component-type='s-search-result']")).map(el => ({
               title: el.querySelector("h2 span")?.innerText,
               price: el.querySelector(".a-price-whole")?.innerText,
-              url: el.querySelector("h2 a")?.href,
-              image: el.querySelector("img")?.src
-            }));
-          });
+              url: el.querySelector("h2 a")?.href
+            }))
+          );
         }
 
         else if (url.includes("zillow.com")) {
-          extracted = await page.evaluate(() => {
-            return Array.from(document.querySelectorAll("article")).map(card => ({
+          extracted = await page.evaluate(() =>
+            Array.from(document.querySelectorAll("article")).map(card => ({
               title: card.querySelector("address")?.innerText,
               price: card.querySelector("[data-test='property-price']")?.innerText,
               url: card.querySelector("a")?.href
-            }));
-          });
+            }))
+          );
         }
 
         extracted = extracted.filter(Boolean).slice(0, step.limit || 30);
@@ -140,19 +127,21 @@ app.post("/run", async (req, res) => {
       }
     }
 
-    return res.json({ logs, result: extracted });
+    res.json({ logs, result: extracted });
 
   } catch (err) {
     log("❌ ERROR: " + err.message);
-    return res.status(500).json({ error: err.message, logs });
+    res.status(500).json({ error: err.message, logs });
 
   } finally {
     if (browser) await browser.close();
   }
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Runner live on port", PORT));
+app.listen(process.env.PORT || 3000, () =>
+  console.log("Runner live on port", process.env.PORT || 3000)
+);
+
 
 
 
