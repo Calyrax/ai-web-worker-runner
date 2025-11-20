@@ -6,6 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Health check
 app.get("/", (req, res) => {
   res.send("Runner is alive ✅");
 });
@@ -26,18 +27,17 @@ app.post("/run", async (req, res) => {
 
   try {
     logs.push("🚀 Launching Chromium...");
-    console.log("🚀 Launching Chromium...");
 
     browser = await chromium.launch({
-  executablePath: "/usr/bin/chromium",
-  headless: true,
-  args: [
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage"
-  ]
-});
-
+      executablePath: "/usr/bin/chromium",
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-blink-features=AutomationControlled"
+      ]
+    });
 
     const context = await browser.newContext({
       userAgent:
@@ -50,41 +50,35 @@ app.post("/run", async (req, res) => {
 
       if (step.action === "open_page") {
         logs.push(`🌐 Opening ${step.url}`);
-        console.log("🌐 Opening:", step.url);
-
         await page.goto(step.url, {
-          waitUntil: "domcontentloaded",
-          timeout: 45000
+          waitUntil: "networkidle",
+          timeout: 60000
         });
+      }
 
-        await page.waitForTimeout(2000);
+      if (step.action === "wait") {
+        const ms = step.duration || 2000;
+        await page.waitForTimeout(ms);
       }
 
       if (step.action === "extract_list") {
         logs.push("🔍 Extracting list...");
-        console.log("🔍 Extracting list...");
+
+        // Ensure DOM fully rendered
+        await page.waitForSelector("a", { timeout: 15000 });
 
         const extracted = await page.evaluate((limit) => {
           const items = [];
 
-          document.querySelectorAll(".athing .titleline > a").forEach(a => {
-            items.push({
-              title: a.innerText.trim(),
-              link: a.href
-            });
+          document.querySelectorAll("a").forEach(a => {
+            const text = a.innerText?.trim();
+            if (text && text.length > 15 && a.href.startsWith("http")) {
+              items.push({
+                title: text,
+                link: a.href
+              });
+            }
           });
-
-          if (items.length === 0) {
-            document.querySelectorAll("a").forEach(a => {
-              const text = a.innerText.trim();
-              if (text.length > 25) {
-                items.push({
-                  title: text,
-                  link: a.href
-                });
-              }
-            });
-          }
 
           return items.slice(0, limit || 30);
         }, step.limit);
@@ -95,7 +89,11 @@ app.post("/run", async (req, res) => {
     }
 
     await browser.close();
-    res.json({ logs, results });
+
+    res.json({
+      logs,
+      results
+    });
 
   } catch (err) {
     console.error("❌ FAILURE:", err);
@@ -105,7 +103,6 @@ app.post("/run", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Runner live on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Runner live on port ${PORT}`));
+
 
