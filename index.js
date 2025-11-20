@@ -11,41 +11,40 @@ app.get("/", (req, res) => {
 });
 
 app.post("/run", async (req, res) => {
-  const { plan } = req.body;
+  console.log("🔥 /run endpoint hit");
 
-  if (!plan || !Array.isArray(plan)) {
+  const { plan } = req.body;
+  console.log("📦 Received plan:", plan);
+
+  if (!Array.isArray(plan)) {
     return res.status(400).json({ error: "Invalid plan format" });
   }
 
   const logs = [];
-  let results = [];
   let browser;
 
   try {
     logs.push("🚀 Launching Chromium...");
 
     browser = await chromium.launch({
-  executablePath: "/usr/bin/chromium",
-  headless: true,
-  args: [
-    "--no-sandbox",
-    "--disable-setuid-sandbox",
-    "--disable-dev-shm-usage",
-    "--disable-gpu"
-  ]
-});
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage"
+      ]
+    });
 
+    const context = await browser.newContext();
+    const page = await context.newPage();
 
-    const page = await browser.newPage();
+    let results = [];
 
     for (const step of plan) {
 
       if (step.action === "open_page") {
         logs.push(`🌐 Opening ${step.url}`);
-        await page.goto(step.url, {
-          waitUntil: "domcontentloaded",
-          timeout: 60000
-        });
+        await page.goto(step.url, { waitUntil: "domcontentloaded", timeout: 60000 });
       }
 
       if (step.action === "wait") {
@@ -55,19 +54,16 @@ app.post("/run", async (req, res) => {
       if (step.action === "extract_list") {
         logs.push("🔍 Extracting list...");
 
-        await page.waitForSelector("a", { timeout: 15000 });
-
         const extracted = await page.evaluate((limit) => {
           const items = [];
+
           document.querySelectorAll("a").forEach(a => {
             const text = a.innerText?.trim();
-            if (text && text.length > 15) {
-              items.push({
-                title: text,
-                link: a.href
-              });
+            if (text && text.length > 15 && a.href.startsWith("http")) {
+              items.push({ title: text, link: a.href });
             }
           });
+
           return items.slice(0, limit || 30);
         }, step.limit);
 
@@ -80,6 +76,7 @@ app.post("/run", async (req, res) => {
     res.json({ logs, results });
 
   } catch (err) {
+    console.error("❌ FAILURE:", err);
     if (browser) await browser.close();
     res.status(500).json({ error: err.message, logs });
   }
