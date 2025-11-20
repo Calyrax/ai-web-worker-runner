@@ -1,13 +1,11 @@
 // ================================
-// AI WEB WORKER RUNNER (STEALTH MODE + PUPPETEER 22 COMPATIBLE)
+// AI WEB WORKER RUNNER (SMARTPROXY + PUPPETEER 22)
 // ================================
 
 import express from "express";
 import cors from "cors";
-
 import puppeteer from "puppeteer-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
-
 import { autoScroll } from "./utils/scroll.js";
 
 puppeteer.use(StealthPlugin());
@@ -16,27 +14,27 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 
+// ================================
+// ENV PROXY CONFIG (FROM RAILWAY VARIABLES)
+// ================================
+const PROXY_HOST = process.env.PROXY_HOST;
+const PROXY_PORT = process.env.PROXY_PORT;
+const PROXY_USER = process.env.PROXY_USER;
+const PROXY_PASS = process.env.PROXY_PASS;
+
 // Health check
 app.get("/", (req, res) => {
   res.json({ status: "runner-online" });
 });
 
 // --------------------------------------
-// Helper utilities
+// Helpers
 // --------------------------------------
-
-async function retry(fn, attempts = 3, delay = 800) {
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      if (i === attempts - 1) throw err;
-      await new Promise((r) => setTimeout(r, delay));
-    }
-  }
+async function wait(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-async function waitForSelectorSafe(page, selector, timeout = 15000) {
+async function waitForSelectorSafe(page, selector, timeout = 20000) {
   try {
     await page.waitForSelector(selector, { timeout });
     return true;
@@ -45,13 +43,8 @@ async function waitForSelectorSafe(page, selector, timeout = 15000) {
   }
 }
 
-async function takeScreenshot(page) {
-  const base64 = await page.screenshot({ encoding: "base64", fullPage: true });
-  return `data:image/png;base64,${base64}`;
-}
-
 // --------------------------------------
-// Main execution route
+// Main runner route
 // --------------------------------------
 app.post("/run", async (req, res) => {
   const plan = req.body.plan;
@@ -60,8 +53,6 @@ app.post("/run", async (req, res) => {
   }
 
   let logs = [];
-  let screenshots = [];
-
   const log = (msg) => {
     console.log(msg);
     logs.push(msg);
@@ -70,37 +61,31 @@ app.post("/run", async (req, res) => {
   let browser;
 
   try {
-    log("Launching Chrome with stealth...");
+    log("Launching Chrome with Smartproxy...");
 
     browser = await puppeteer.launch({
-      headless: "new",
+      headless: true,
       args: [
+        `--proxy-server=http://${PROXY_HOST}:${PROXY_PORT}`,
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--start-maximized",
-        "--window-size=1920,1080",
+        "--disable-gpu",
       ],
     });
 
     const page = await browser.newPage();
 
-    await page.setViewport({ width: 1920, height: 1080 });
-
-    // Hide webdriver flag
-    await page.evaluateOnNewDocument(() => {
-      Object.defineProperty(navigator, "webdriver", {
-        get: () => undefined,
+    if (PROXY_USER && PROXY_PASS) {
+      await page.authenticate({
+        username: PROXY_USER,
+        password: PROXY_PASS,
       });
-    });
+    }
 
     await page.setUserAgent(
       "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
     );
-
-    await page.setExtraHTTPHeaders({
-      "accept-language": "en-US,en;q=0.9",
-    });
 
     log(`Plan contains ${plan.length} steps`);
 
@@ -112,164 +97,98 @@ app.post("/run", async (req, res) => {
       log(`--- Step ${i + 1}/${plan.length} ---`);
       log(JSON.stringify(step));
 
-      // ---------------------------
-      // open_page
-      // ---------------------------
+      // OPEN PAGE
       if (step.action === "open_page") {
         log("Opening page: " + step.url);
 
         await page.goto(step.url, {
-          waitUntil: "networkidle2",
+          waitUntil: "domcontentloaded",
           timeout: 60000,
         });
 
-        // Increased delay for anti-bot negotiation
-        await new Promise((r) => setTimeout(r, 5000));
-
-        log("Scrolling page to load dynamic content...");
+        await wait(3000);
+        log("Auto scrolling...");
         await autoScroll(page);
-
-        // Simulate human mouse movement
-        await page.mouse.move(200, 300);
-        await page.mouse.move(400, 500);
-        await page.mouse.move(600, 200);
-
-        screenshots.push(await takeScreenshot(page));
+        await wait(2000);
       }
 
-      // ---------------------------
-      // wait
-      // ---------------------------
+      // WAIT
       else if (step.action === "wait") {
         const ms =
-          step.duration ||
           step.milliseconds ||
-          (step.seconds ? step.seconds * 1000 : 0);
-
-        log(`Waiting for ${ms}ms`);
-        await new Promise((r) => setTimeout(r, ms));
+          (typeof step.duration === "string"
+            ? parseInt(step.duration) * 1000
+            : 0);
+        log(`Waiting ${ms}ms`);
+        await wait(ms);
       }
 
-      // ---------------------------
-      // extract_list (FINAL FORCE MODE)
-      // ---------------------------
+      // EXTRACT LIST
       else if (step.action === "extract_list") {
-        log("Extracting list…");
+        log("Extracting list...");
+        const url = page.url();
 
-        const domain = page.url();
+        // AMAZON
+        if (url.includes("amazon.")) {
+          log("Amazon extractor active");
 
-        extracted = await retry(async () => {
-          // ================= AMAZON =================
-          if (domain.includes("amazon.")) {
-            log("Amazon FORCE render extractor");
+          await waitForSelectorSafe(page, "[data-component-type='s-search-result']");
 
-            await Promise.race([
-              page.waitForSelector("div.s-main-slot"),
-              page.waitForSelector("div.sg-col-inner"),
-              page.waitForSelector("span.a-size-medium"),
-            ]);
+          extracted = await page.evaluate(() => {
+            return [...document.querySelectorAll("[data-component-type='s-search-result']")]
+              .map(el => ({
+                title: el.querySelector("h2 span")?.innerText,
+                price: el.querySelector(".a-price-whole")?.innerText,
+                url: el.querySelector("h2 a")?.href,
+                image: el.querySelector("img")?.src
+              }))
+              .filter(x => x.title);
+          });
+        }
 
-            await autoScroll(page, 30);
+        // ZILLOW
+        else if (url.includes("zillow.com")) {
+          log("Zillow extractor active");
 
-            return await page.evaluate(() => {
-              const cards = [...document.querySelectorAll("div[data-component-type='s-search-result']")];
+          await waitForSelectorSafe(page, "article");
 
-              return cards
-                .map((card) => {
-                  const title = card.querySelector("h2 span")?.innerText;
-                  const priceWhole = card.querySelector(".a-price-whole")?.innerText;
-                  const priceFraction = card.querySelector(".a-price-fraction")?.innerText;
-                  const image = card.querySelector("img")?.src;
-                  const url = card.querySelector("h2 a")?.href;
+          extracted = await page.evaluate(() => {
+            return [...document.querySelectorAll("article")]
+              .map(card => ({
+                title: card.querySelector("address")?.innerText,
+                price: card.querySelector("span[data-test='property-price']")?.innerText,
+                url: card.querySelector("a")?.href,
+                image: card.querySelector("img")?.src
+              }))
+              .filter(x => x.title);
+          });
+        }
 
-                  if (!title) return null;
-
-                  return {
-                    title,
-                    price: priceWhole
-                      ? `$${priceWhole}${priceFraction ? "." + priceFraction : ""}`
-                      : null,
-                    image,
-                    url,
-                  };
-                })
-                .filter(Boolean);
-            });
-          }
-
-          // ================= ZILLOW =================
-          if (domain.includes("zillow.com")) {
-            log("Zillow FORCE render extractor");
-
-            await page.waitForSelector("article", { timeout: 20000 });
-            await autoScroll(page, 30);
-
-            return await page.evaluate(() => {
-              const cards = [...document.querySelectorAll("article")];
-
-              return cards
-                .map((card) => {
-                  const title = card.querySelector("address")?.innerText;
-                  const price =
-                    card.querySelector("span[data-test='property-card-price']")?.innerText ||
-                    card.querySelector("span[data-test='property-price']")?.innerText;
-                  const image = card.querySelector("img")?.src;
-                  const url =
-                    card.querySelector("a[data-test='property-card-link']")?.href ||
-                    card.querySelector("a")?.href;
-
-                  if (!title) return null;
-
-                  return { title, price, image, url };
-                })
-                .filter(Boolean);
-            });
-          }
-
-          // ============ FALLBACK GENERIC ============
-          log("Using generic extractor");
+        // HN + GENERIC
+        else {
           const selector = step.selector || "a";
-
-          return await page.$$eval(selector, (els) =>
-            els.map((el) => ({
-              text: el.innerText?.trim() || "",
-              href: el.href || null,
+          extracted = await page.$$eval(selector, els =>
+            els.map(el => ({
+              text: el.innerText?.trim(),
+              href: el.href
             }))
           );
-        });
+        }
 
-        extracted = extracted.slice(0, step.limit || step.count || 20);
-
-        log(
-          `Extracted ${extracted.length} items — sample: ${JSON.stringify(
-            extracted.slice(0, 3),
-            null,
-            2
-          )}`
-        );
-      } else {
-        log("Unknown action: " + step.action);
+        extracted = extracted.slice(0, step.limit || 20);
+        log(`Extracted ${extracted.length} items`);
       }
     }
 
-    return res.json({
-      logs,
-      result: extracted,
-      screenshots,
-    });
+    return res.json({ logs, result: extracted });
   } catch (err) {
-    console.error(err);
     logs.push("FATAL ERROR: " + err.message);
     return res.status(500).json({ error: err.message, logs });
   } finally {
-    if (browser) {
-      await browser.close();
-      logs.push("Browser closed");
-    }
+    if (browser) await browser.close();
   }
 });
 
-// Start server
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log("Runner backend listening on port " + PORT);
