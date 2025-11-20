@@ -2,6 +2,8 @@ FROM node:18-bullseye
 
 WORKDIR /app
 
+RUN echo "RAILWAY HARD RESET BUILD $(date)"
+
 RUN apt-get update && apt-get install -y \
   chromium \
   ca-certificates \
@@ -16,13 +18,15 @@ RUN apt-get update && apt-get install -y \
   libxshmfence1 \
   --no-install-recommends
 
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_BROWSERS_PATH=0
+
 COPY package*.json ./
 RUN npm install
 
 COPY . .
 
-ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
-
 EXPOSE 3000
 CMD ["node", "index.js"]
+
 
