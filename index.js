@@ -31,16 +31,14 @@ app.post("/run", async (req, res) => {
 
     // ✅ FORCE SYSTEM CHROMIUM (THIS IS THE FIX)
     browser = await chromium.launch({
-      executablePath: "/usr/bin/chromium",
-      headless: true,
-      args: [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-        "--single-process"
-      ]
-    });
+  headless: true,
+  args: [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-dev-shm-usage"
+  ]
+});
+
 
     const context = await browser.newContext({
       userAgent:
