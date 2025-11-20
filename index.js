@@ -29,9 +29,17 @@ app.post("/run", async (req, res) => {
     logs.push("🚀 Launching Chromium...");
     console.log("🚀 Launching Chromium...");
 
-    // ✅ CLEAN LAUNCH – Playwright native Chromium (correct for container)
+    // ✅ FORCE SYSTEM CHROMIUM (THIS IS THE FIX)
     browser = await chromium.launch({
-      headless: true
+      executablePath: "/usr/bin/chromium",
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--single-process"
+      ]
     });
 
     const context = await browser.newContext({
@@ -43,7 +51,6 @@ app.post("/run", async (req, res) => {
 
     for (const step of plan) {
 
-      // ---------------- OPEN PAGE ----------------
       if (step.action === "open_page") {
         logs.push(`🌐 Opening ${step.url}`);
         console.log("🌐 Opening:", step.url);
@@ -56,7 +63,6 @@ app.post("/run", async (req, res) => {
         await page.waitForTimeout(2000);
       }
 
-      // ---------------- EXTRACT LIST ----------------
       if (step.action === "extract_list") {
         logs.push("🔍 Extracting list...");
         console.log("🔍 Extracting list...");
@@ -64,7 +70,6 @@ app.post("/run", async (req, res) => {
         const extracted = await page.evaluate((limit) => {
           const items = [];
 
-          // Hacker News structure
           document.querySelectorAll(".athing .titleline > a").forEach(a => {
             items.push({
               title: a.innerText.trim(),
@@ -72,7 +77,6 @@ app.post("/run", async (req, res) => {
             });
           });
 
-          // Fallback generic extractor
           if (items.length === 0) {
             document.querySelectorAll("a").forEach(a => {
               const text = a.innerText.trim();
@@ -99,14 +103,10 @@ app.post("/run", async (req, res) => {
   } catch (err) {
     console.error("❌ FAILURE:", err);
     if (browser) await browser.close();
-    res.status(500).json({
-      error: err.message,
-      logs
-    });
+    res.status(500).json({ error: err.message, logs });
   }
 });
 
-// ✅ Must match Docker EXPOSE
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Runner live on port ${PORT}`);
